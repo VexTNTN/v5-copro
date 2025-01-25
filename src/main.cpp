@@ -1,30 +1,23 @@
 #include "main.h"
 #include "pros/serial.hpp"
+#include <cstring>
 
 void initialize() {
+    // set up serial port
     pros::lcd::initialize();
     pros::Serial serial(21);
-    serial.set_baudrate(9600);
-    pros::delay(1000);
+    serial.set_baudrate(921600);
+    pros::delay(1000); // delay just in case
 
-    while (true) {
-        if (serial.get_read_avail() == 0) {
-            pros::delay(10);
-            continue;
-        }
+    // read and parse data
+    //auto data = read(serial);
+    //std::cout << "read " << data.size() << std::endl;
+    //std::cout << int(data[0]) << std::endl;
+    //std::cout << std::string(reinterpret_cast<const char*>(data.data()), data.size()) << std::endl;
+    
+    // wait 5 seconds
+    // pros::delay(5000);
 
-        std::uint8_t buf[200];
-        serial.read(buf, 200);
-
-        std::ostringstream convert;
-        for (int a = 0; a < 200; a++) {
-            convert << (int)buf[a];
-        }
-
-        std::string str = convert.str();
-
-        pros::lcd::print(0, str.c_str());
-
-        pros::delay(10);
-    }
+    // send data
+    // serial.write(stringToBuf("Hi!"), 2);
 }
