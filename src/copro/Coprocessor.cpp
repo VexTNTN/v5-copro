@@ -1,8 +1,10 @@
 #include "copro/Coprocessor.hpp"
+#include <cerrno>
+#include <system_error>
 
 namespace copro {
 
-Coprocessor::Coprocessor(int port, int baudrate) : m_serial(port, baudrate) {
+Coprocessor::Coprocessor(int port) : m_serial(port, 921600) {
   m_serial.flush();
 }
 
@@ -78,11 +80,28 @@ static std::vector<uint8_t> byte_stuff(std::span<const uint8_t> data) {
 std::span<const uint8_t> Coprocessor::read() {
   constexpr std::array<uint8_t, 2> START_DELIM = {0xAA, 0x55};
   constexpr std::array<uint8_t, 2> END_DELIM = {0x55, 0xAA};
-  int time_waited = 0;
+  bool waited = 0;
 
-  auto read_byte = [&]() -> std::optional<uint8_t> {
+  // check if there's any data available
+  if (m_serial.get_read_avail() < 1) {
+    throw std::system_error(ENODATA, std::generic_category());
+  }
+
+  // read byte lambda
+  std::function<std::optional<uint8_t>()> read_byte =
+      [&]() -> std::optional<uint8_t> {
     int start = pros::millis();
     if (m_serial.get_read_avail() < 1) {
+      if (!waited) {
+        pros::delay(1);
+        waited = true;
+        return read_byte();
+      } else {
+        // there is no byte available in the serial stream
+        // the packet is either malformed, or the baud rate is very low
+        // TODO: make this work even if the baud rate is low
+        throw std::system_error(ETIMEDOUT, std::generic_category());
+      }
       return std::nullopt;
     }
     int b = m_serial.read_byte();
