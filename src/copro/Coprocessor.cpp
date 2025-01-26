@@ -1,8 +1,12 @@
-#include "copro/codec.hpp"
+#include "copro/Coprocessor.hpp"
 
 namespace copro {
 
-uint16_t crc16(std::span<const uint8_t> data) {
+Coprocessor::Coprocessor(int port, int baudrate) : m_serial(port, baudrate) {
+  m_serial.flush();
+}
+
+static uint16_t crc16(std::span<const uint8_t> data) {
   static const uint16_t crc_table[256] = {
       0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7, 0x8108,
       0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF, 0x1231, 0x0210,
@@ -41,7 +45,7 @@ uint16_t crc16(std::span<const uint8_t> data) {
 }
 
 // Helper: Un-stuff data
-std::vector<uint8_t> byte_unstuff(std::span<const uint8_t> data) {
+static std::vector<uint8_t> byte_unstuff(std::span<const uint8_t> data) {
   std::vector<uint8_t> unstuffed;
   unstuffed.reserve(data.size());
 
@@ -56,7 +60,7 @@ std::vector<uint8_t> byte_unstuff(std::span<const uint8_t> data) {
 }
 
 // Helper: Byte-stuff data (escape 0xAA, 0x55, 0xBB)
-std::vector<uint8_t> byte_stuff(std::span<const uint8_t> data) {
+static std::vector<uint8_t> byte_stuff(std::span<const uint8_t> data) {
   std::vector<uint8_t> stuffed;
   stuffed.reserve(data.size() * 2);
 
@@ -71,4 +75,94 @@ std::vector<uint8_t> byte_stuff(std::span<const uint8_t> data) {
   return stuffed;
 }
 
+std::span<const uint8_t> Coprocessor::read() {
+  constexpr std::array<uint8_t, 2> START_DELIM = {0xAA, 0x55};
+  constexpr std::array<uint8_t, 2> END_DELIM = {0x55, 0xAA};
+  constexpr int64_t TIMEOUT_MS = 100;
+
+  auto read_byte = [&]() -> std::optional<uint8_t> {
+    int start = pros::millis();
+    while (m_serial.get_read_avail() < 1) {
+      if (pros::millis() - start > 10) {
+        return std::nullopt;
+      }
+      pros::delay(2);
+    }
+    int b = m_serial.read_byte();
+    return b != -1 ? std::make_optional(static_cast<uint8_t>(b)) : std::nullopt;
+  };
+
+  // 1. Find start delimiters
+  while (true) {
+    auto b1 = read_byte();
+    if (!b1 || *b1 != START_DELIM[0]) {
+      continue;
+    }
+
+    auto b2 = read_byte();
+    if (b2 && *b2 == START_DELIM[1]) {
+      break;
+    }
+  }
+
+  // 2. Read header
+  struct Header {
+    uint16_t payload_len;
+    uint16_t header_crc;
+  } header;
+
+  for (size_t i = 0; i < sizeof(header); ++i) {
+    auto b = read_byte();
+    if (!b) {
+      return {};
+    }
+    reinterpret_cast<uint8_t *>(&header)[i] = *b;
+  }
+
+  // Validate header CRC
+  if (crc16({reinterpret_cast<uint8_t *>(&header.payload_len), 2}) !=
+      header.header_crc) {
+    return {}; // Bad header
+  }
+
+  // 3. Read stuffed payload
+  m_rx_buffer.resize(header.payload_len);
+  for (size_t i = 0; i < header.payload_len; ++i) {
+    auto b = read_byte();
+    if (!b) {
+      m_rx_buffer.clear();
+      return {};
+    }
+    m_rx_buffer[i] = *b;
+  }
+
+  // 4. Read payload CRC
+  uint16_t received_crc = 0;
+  for (size_t i = 0; i < 2; ++i) {
+    auto b = read_byte();
+    if (!b) {
+      m_rx_buffer.clear();
+      return {};
+    }
+    reinterpret_cast<uint8_t *>(&received_crc)[i] = *b;
+  }
+
+  // 5. Validate end delimiters
+  auto end1 = read_byte();
+  auto end2 = read_byte();
+  if (!end1 || !end2 || *end1 != END_DELIM[0] || *end2 != END_DELIM[1]) {
+    m_rx_buffer.clear();
+    return {};
+  }
+
+  // 6. Unstuff and validate payload
+  std::vector<uint8_t> unstuffed = byte_unstuff(m_rx_buffer);
+  if (crc16(unstuffed) != received_crc) {
+    return {};
+  }
+
+  // Return valid payload
+  m_rx_buffer = std::move(unstuffed);
+  return {m_rx_buffer.data(), m_rx_buffer.size()};
+}
 } // namespace copro
