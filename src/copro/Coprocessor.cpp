@@ -78,15 +78,12 @@ static std::vector<uint8_t> byte_stuff(std::span<const uint8_t> data) {
 std::span<const uint8_t> Coprocessor::read() {
   constexpr std::array<uint8_t, 2> START_DELIM = {0xAA, 0x55};
   constexpr std::array<uint8_t, 2> END_DELIM = {0x55, 0xAA};
-  constexpr int64_t TIMEOUT_MS = 100;
+  int time_waited = 0;
 
   auto read_byte = [&]() -> std::optional<uint8_t> {
     int start = pros::millis();
-    while (m_serial.get_read_avail() < 1) {
-      if (pros::millis() - start > 10) {
-        return std::nullopt;
-      }
-      pros::delay(2);
+    if (m_serial.get_read_avail() < 1) {
+      return std::nullopt;
     }
     int b = m_serial.read_byte();
     return b != -1 ? std::make_optional(static_cast<uint8_t>(b)) : std::nullopt;
