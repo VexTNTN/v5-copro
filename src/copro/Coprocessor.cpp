@@ -44,7 +44,7 @@ static uint16_t crc16(std::span<const uint8_t> data) {
   return crc;
 }
 
-// Helper: Un-stuff data
+// Helper: Un-stuff data (escape 0xAA, 0x55, 0xBB)
 static std::vector<uint8_t> byte_unstuff(std::span<const uint8_t> data) {
   std::vector<uint8_t> unstuffed;
   unstuffed.reserve(data.size());
