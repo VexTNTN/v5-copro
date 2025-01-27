@@ -1,15 +1,20 @@
 #include "copro/Coprocessor.hpp"
+#include "pros/error.h"
 #include <cerrno>
 #include <system_error>
 
+// this is hell, thanks WG21
+
 namespace copro {
 
-Coprocessor::Coprocessor(int port) : m_serial(port, 921600) {
-  m_serial.flush();
+Coprocessor::Coprocessor(int port, int baud)
+    // Calculate timeout for 10 bits/byte (8N1 format)
+    : m_serial(port, baud), m_timeout(10000000 / baud) {
+  m_serial.flush(); // clear the buffer
 }
 
-static uint16_t crc16(std::span<const uint8_t> data) {
-  static const uint16_t crc_table[256] = {
+static uint16_t crc16(std::vector<uint8_t> &data) {
+  static const std::array<uint16_t, 256> table = {
       0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7, 0x8108,
       0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF, 0x1231, 0x0210,
       0x3273, 0x2252, 0x52B5, 0x4294, 0x72F7, 0x62D6, 0x9339, 0x8318, 0xB37B,
@@ -41,144 +46,123 @@ static uint16_t crc16(std::span<const uint8_t> data) {
       0x2E93, 0x3EB2, 0x0ED1, 0x1EF0};
 
   uint16_t crc = 0xFFFF;
-  for (auto byte : data)
-    crc = (crc << 8) ^ crc_table[((crc >> 8) ^ byte) & 0xFF];
+  for (uint8_t byte : data) {
+    crc = (crc << 8) ^ table[((crc >> 8) ^ byte) & 0xFF];
+  }
   return crc;
 }
 
-// Helper: Un-stuff data (escape 0xAA, 0x55, 0xBB)
-static std::vector<uint8_t> byte_unstuff(std::span<const uint8_t> data) {
-  std::vector<uint8_t> unstuffed;
-  unstuffed.reserve(data.size());
-
-  for (size_t i = 0; i < data.size(); ++i) {
-    if (data[i] == 0xBB && i + 1 < data.size()) {
-      unstuffed.push_back(data[++i]);
-    } else {
-      unstuffed.push_back(data[i]);
-    }
+// sleep for a number of microseconds
+// WARNING: this spinlocks the scheduler
+static void usleep(uint64_t time) noexcept {
+  const uint64_t start = pros::micros();
+  while (pros::micros() - start < time) {
+    asm("nop");
   }
-  return unstuffed;
 }
 
-// Helper: Byte-stuff data (escape 0xAA, 0x55, 0xBB)
-static std::vector<uint8_t> byte_stuff(std::span<const uint8_t> data) {
-  std::vector<uint8_t> stuffed;
-  stuffed.reserve(data.size() * 2);
-
-  for (uint8_t b : data) {
-    if (b == 0xAA || b == 0x55 || b == 0xBB) {
-      stuffed.push_back(0xBB);
-      stuffed.push_back(b);
-    } else {
-      stuffed.push_back(b);
+uint8_t Coprocessor::peek_byte() {
+  int32_t raw = m_serial.peek_byte();
+  // Handle timeout scenario with single retry
+  if (raw == -1) {
+    usleep(m_timeout);
+    raw = m_serial.peek_byte();
+    if (raw == -1) {
+      throw std::system_error(EIO, std::generic_category());
     }
   }
-  return stuffed;
+  // Handle PROS error
+  if (raw == PROS_ERR) {
+    throw std::system_error(errno, std::generic_category());
+  }
+  return static_cast<uint8_t>(raw);
 }
 
-std::span<const uint8_t> Coprocessor::read() {
-  constexpr std::array<uint8_t, 2> START_DELIM = {0xAA, 0x55};
-  constexpr std::array<uint8_t, 2> END_DELIM = {0x55, 0xAA};
-  bool waited = 0;
+uint8_t Coprocessor::read_byte() {
+  int32_t raw = m_serial.read_byte();
+  // Handle timeout scenario with single retry
+  if (raw == -1) {
+    usleep(m_timeout);
+    raw = m_serial.read_byte();
+    if (raw == -1) {
+      throw std::system_error(EIO, std::generic_category());
+    }
+  }
+  // Handle PROS error
+  if (raw == PROS_ERR) {
+    throw std::system_error(errno, std::generic_category());
+  }
+  return static_cast<uint8_t>(raw);
+}
 
-  // check if there's any data available
-  if (m_serial.get_read_avail() < 1) {
+template <typename T> T Coprocessor::read_stream() {
+  static_assert(std::is_trivially_copyable_v<T>,
+                "Type must be trivially copyable");
+  std::array<uint8_t, sizeof(T)> raw;
+  for (uint8_t &b : raw) {
+    b = read_byte();
+  }
+  return std::bit_cast<T>(raw);
+}
+
+// protocol:
+// [0xAA 0x55] [16-bit length] [CRC16] [stuffed payload]
+//
+// algorithm:
+// 1. read until 0xAA 0x55 is found
+// 2. read byte by byte until unescaped 0xAA or 0x55 detected
+// 3. check CRC
+//
+// yes, it's slow. And is very efficient worst case scenario.
+// however:
+// if a packet is corrupted, only that is packet is lost
+// this is a very robust protocol
+std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
+  // check if there's data available
+  if (m_serial.get_read_avail() == 0) {
     throw std::system_error(ENODATA, std::generic_category());
   }
 
-  // read byte lambda
-  std::function<std::optional<uint8_t>()> read_byte =
-      [&]() -> std::optional<uint8_t> {
-    int start = pros::millis();
-    if (m_serial.get_read_avail() < 1) {
-      if (!waited) {
-        pros::delay(1);
-        waited = true;
-        return read_byte();
-      } else {
-        // there is no byte available in the serial stream
-        // the packet is either malformed, or the baud rate is very low
-        // TODO: make this work even if the baud rate is low
-        throw std::system_error(ETIMEDOUT, std::generic_category());
-      }
-      return std::nullopt;
-    }
-    int b = m_serial.read_byte();
-    return b != -1 ? std::make_optional(static_cast<uint8_t>(b)) : std::nullopt;
-  };
-
-  // 1. Find start delimiters
+  // find the next delimiter
   while (true) {
-    auto b1 = read_byte();
-    if (!b1 || *b1 != START_DELIM[0]) {
+    // find 0xAA
+    if (read_stream<uint8_t>() != 0xAA) {
       continue;
     }
-
-    auto b2 = read_byte();
-    if (b2 && *b2 == START_DELIM[1]) {
+    // if the next byte will be 0xAA, bail
+    if (peek_byte() == 0xAA) {
+      throw std::system_error(EIO, std::generic_category());
+    }
+    // if the next byte is 0x55, we've found the delimiter
+    if (read_stream<uint8_t>() == 0x55) {
       break;
     }
   }
 
-  // 2. Read header
-  struct Header {
-    uint16_t payload_len;
-    uint16_t header_crc;
-  } header;
+  // read the header
+  uint16_t length = read_stream<uint16_t>();
+  uint16_t crc = read_stream<uint16_t>();
 
-  for (size_t i = 0; i < sizeof(header); ++i) {
-    auto b = read_byte();
-    if (!b) {
-      return {};
+  // read the payload
+  std::vector<uint8_t> payload(length);
+  for (uint8_t &b : payload) {
+    b = peek_byte();
+    if (b == 0xAA || b == 0x55) { // if the next byte is 0xAA or 0x55, bail
+      throw std::system_error(EPROTO, std::generic_category());
+    } else { // otherwise, pop it from the serial buffer
+      read_byte();
     }
-    reinterpret_cast<uint8_t *>(&header)[i] = *b;
-  }
-
-  // Validate header CRC
-  if (crc16({reinterpret_cast<uint8_t *>(&header.payload_len), 2}) !=
-      header.header_crc) {
-    return {}; // Bad header
-  }
-
-  // 3. Read stuffed payload
-  m_rx_buffer.resize(header.payload_len);
-  for (size_t i = 0; i < header.payload_len; ++i) {
-    auto b = read_byte();
-    if (!b) {
-      m_rx_buffer.clear();
-      return {};
+    if (b == 0xBB) { // if an escape is found, read the next byte
+      b = read_byte();
     }
-    m_rx_buffer[i] = *b;
   }
 
-  // 4. Read payload CRC
-  uint16_t received_crc = 0;
-  for (size_t i = 0; i < 2; ++i) {
-    auto b = read_byte();
-    if (!b) {
-      m_rx_buffer.clear();
-      return {};
-    }
-    reinterpret_cast<uint8_t *>(&received_crc)[i] = *b;
+  // validate payload with CRC
+  if (crc != crc16(payload)) {
+    throw std::system_error(EBADMSG, std::generic_category());
   }
 
-  // 5. Validate end delimiters
-  auto end1 = read_byte();
-  auto end2 = read_byte();
-  if (!end1 || !end2 || *end1 != END_DELIM[0] || *end2 != END_DELIM[1]) {
-    m_rx_buffer.clear();
-    return {};
-  }
-
-  // 6. Unstuff and validate payload
-  std::vector<uint8_t> unstuffed = byte_unstuff(m_rx_buffer);
-  if (crc16(unstuffed) != received_crc) {
-    return {};
-  }
-
-  // Return valid payload
-  m_rx_buffer = std::move(unstuffed);
-  return {m_rx_buffer.data(), m_rx_buffer.size()};
+  // return payload
+  return payload;
 }
 } // namespace copro
