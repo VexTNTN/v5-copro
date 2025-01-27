@@ -107,16 +107,6 @@ template <typename T> T Coprocessor::read_stream() {
 
 // protocol:
 // [0xAA 0x55] [16-bit length] [CRC16] [stuffed payload]
-//
-// algorithm:
-// 1. read until 0xAA 0x55 is found
-// 2. read byte by byte until unescaped 0xAA or 0x55 detected
-// 3. check CRC
-//
-// yes, it's slow. And is very efficient worst case scenario.
-// however:
-// if a packet is corrupted, only that is packet is lost
-// this is a very robust protocol
 std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
   // check if there's data available
   if (m_serial.get_read_avail() == 0) {
@@ -126,15 +116,11 @@ std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
   // find the next delimiter
   while (true) {
     // find 0xAA
-    if (read_stream<uint8_t>() != 0xAA) {
+    if (read_byte() != 0xAA) {
       continue;
     }
-    // if the next byte will be 0xAA, bail
-    if (peek_byte() == 0xAA) {
-      throw std::system_error(EIO, std::generic_category());
-    }
     // if the next byte is 0x55, we've found the delimiter
-    if (read_stream<uint8_t>() == 0x55) {
+    if (read_byte() == 0x55) {
       break;
     }
   }
