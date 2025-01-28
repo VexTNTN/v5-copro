@@ -176,8 +176,12 @@ template <typename T> T Coprocessor::read_stream() {
 // [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
 std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
   // check if there's data available
-  if (m_serial.get_read_avail() == 0) {
+  const int avail = m_serial.get_read_avail();
+  if (avail == 0) {
     throw std::system_error(ENODATA, std::generic_category());
+  }
+  if (avail == PROS_ERR) {
+    throw std::system_error(errno, std::generic_category());
   }
 
   // find the next delimiter
