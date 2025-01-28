@@ -2,6 +2,7 @@
 #include "pros/error.h"
 #include <cerrno>
 #include <system_error>
+#include <type_traits>
 
 // this is hell, thanks WG21
 
@@ -13,7 +14,15 @@ Coprocessor::Coprocessor(int port, int baud)
   m_serial.flush(); // clear the buffer
 }
 
-static uint16_t crc16(std::vector<uint8_t> &data) {
+/**
+ * @brief calculate a CRC16 using CCITT-FALSE
+ *
+ * @param data the data to generate a crc16 for
+ * @return uint16_t the crc16
+ */
+static uint16_t crc16(const std::vector<uint8_t> &data) {
+  // lookup table for extra zoom
+  // (copy/paste was easier than implementing the algorithm)
   static const std::array<uint16_t, 256> table = {
       0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7, 0x8108,
       0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF, 0x1231, 0x0210,
@@ -52,6 +61,60 @@ static uint16_t crc16(std::vector<uint8_t> &data) {
   return crc;
 }
 
+/**
+ * @brief serialize an instance of a trivially-copyable datatype, and add it to
+ * a vector
+ *
+ * @tparam T the datatype
+ * @param v the vector to add to
+ * @param data the data to serialize
+ */
+template <typename T>
+static void vector_append(std::vector<uint8_t> &v, const T &data) {
+  static_assert(std::is_trivially_copyable_v<T>,
+                "Type must be trivially copyable");
+  const auto raw = std::bit_cast<std::array<const uint8_t, sizeof(T)>>(data);
+  for (uint8_t b : raw) {
+    v.push_back(b);
+  }
+}
+
+// protocol:
+// [0xAA 0x55] [16-bit length] [CRC16] [stuffed payload]
+void Coprocessor::write(const std::vector<uint8_t> &message) {
+  // stuff the message
+  std::vector<uint8_t> payload;
+  for (uint8_t b : message) {
+    if (b == 0xAA || b == 0x55 || b == 0xBB) {
+      payload.push_back(0xBB);
+      payload.push_back(b);
+    }
+  }
+
+  // check payload size
+  if (payload.size() > std::numeric_limits<uint16_t>::max()) {
+    throw std::system_error(EOVERFLOW, std::generic_category());
+  }
+
+  // create the header
+  std::vector<uint8_t> header;
+  // add the delimiter
+  header.push_back(0xAA);
+  header.push_back(0x55);
+  // add the CRC16
+  vector_append(header, crc16(message));
+  // add the length
+  vector_append(header, static_cast<uint16_t>(payload.size()));
+
+  // write
+  if (m_serial.write(header.data(), header.size()) == PROS_ERR) {
+    throw std::system_error(errno, std::generic_category());
+  }
+  if (m_serial.write(payload.data(), payload.size()) == PROS_ERR) {
+    throw std::system_error(errno, std::generic_category());
+  }
+}
+
 // sleep for a number of microseconds
 // WARNING: this spinlocks the scheduler
 static void usleep(uint64_t time) noexcept {
@@ -68,7 +131,7 @@ uint8_t Coprocessor::peek_byte() {
     usleep(m_timeout);
     raw = m_serial.peek_byte();
     if (raw == -1) {
-      throw std::system_error(EIO, std::generic_category());
+      throw std::system_error(ENOLINK, std::generic_category());
     }
   }
   // Handle PROS error
@@ -85,7 +148,7 @@ uint8_t Coprocessor::read_byte() {
     usleep(m_timeout);
     raw = m_serial.read_byte();
     if (raw == -1) {
-      throw std::system_error(EIO, std::generic_category());
+      throw std::system_error(ENOLINK, std::generic_category());
     }
   }
   // Handle PROS error
