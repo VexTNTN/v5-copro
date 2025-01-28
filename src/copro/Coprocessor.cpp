@@ -91,8 +91,8 @@ void Coprocessor::write(const std::vector<uint8_t> &message) {
   for (uint8_t b : message) {
     if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) {
       payload.push_back(ESCAPE);
-      payload.push_back(b);
     }
+    payload.push_back(b);
   }
 
   // check payload size
@@ -174,7 +174,7 @@ template <typename T> T Coprocessor::read_stream() {
 
 // protocol:
 // [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
-std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
+std::vector<uint8_t> Coprocessor::read() {
   // check if there's data available
   const int avail = m_serial.get_read_avail();
   if (avail == 0) {

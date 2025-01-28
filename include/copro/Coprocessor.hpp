@@ -40,7 +40,7 @@ public:
    *
    * @return std::span<const uint8_t> the payload
    */
-  std::vector<uint8_t> read(uint32_t timeout);
+  std::vector<uint8_t> read();
 
 private:
   /**
