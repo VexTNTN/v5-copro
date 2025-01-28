@@ -8,6 +8,10 @@
 
 namespace copro {
 
+constexpr uint8_t DELIMITER_1 = 0xAA;
+constexpr uint8_t DELIMITER_2 = 0x55;
+constexpr uint8_t ESCAPE = 0xBB;
+
 Coprocessor::Coprocessor(int port, int baud)
     // Calculate timeout for 10 bits/byte (8N1 format)
     : m_serial(port, baud), m_timeout(10000000 / baud) {
@@ -23,7 +27,7 @@ Coprocessor::Coprocessor(int port, int baud)
 static uint16_t crc16(const std::vector<uint8_t> &data) {
   // lookup table for extra zoom
   // (copy/paste was easier than implementing the algorithm)
-  static const std::array<uint16_t, 256> table = {
+  constexpr std::array<uint16_t, 256> table = {
       0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7, 0x8108,
       0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF, 0x1231, 0x0210,
       0x3273, 0x2252, 0x52B5, 0x4294, 0x72F7, 0x62D6, 0x9339, 0x8318, 0xB37B,
@@ -80,13 +84,13 @@ static void vector_append(std::vector<uint8_t> &v, const T &data) {
 }
 
 // protocol:
-// [0xAA 0x55] [16-bit length] [CRC16] [stuffed payload]
+// [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
 void Coprocessor::write(const std::vector<uint8_t> &message) {
   // stuff the message
   std::vector<uint8_t> payload;
   for (uint8_t b : message) {
-    if (b == 0xAA || b == 0x55 || b == 0xBB) {
-      payload.push_back(0xBB);
+    if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) {
+      payload.push_back(ESCAPE);
       payload.push_back(b);
     }
   }
@@ -99,8 +103,8 @@ void Coprocessor::write(const std::vector<uint8_t> &message) {
   // create the header
   std::vector<uint8_t> header;
   // add the delimiter
-  header.push_back(0xAA);
-  header.push_back(0x55);
+  header.push_back(DELIMITER_1);
+  header.push_back(DELIMITER_2);
   // add the CRC16
   vector_append(header, crc16(message));
   // add the length
@@ -169,7 +173,7 @@ template <typename T> T Coprocessor::read_stream() {
 }
 
 // protocol:
-// [0xAA 0x55] [16-bit length] [CRC16] [stuffed payload]
+// [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
 std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
   // check if there's data available
   if (m_serial.get_read_avail() == 0) {
@@ -178,12 +182,12 @@ std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
 
   // find the next delimiter
   while (true) {
-    // find 0xAA
-    if (read_byte() != 0xAA) {
+    // find DELIMITER_1
+    if (read_byte() != DELIMITER_1) {
       continue;
     }
-    // if the next byte is 0x55, we've found the delimiter
-    if (read_byte() == 0x55) {
+    // if the next byte is DELIMITER_2, we've found the delimiter
+    if (read_byte() == DELIMITER_2) {
       break;
     }
   }
@@ -196,12 +200,14 @@ std::vector<uint8_t> Coprocessor::read(uint32_t timeout) {
   std::vector<uint8_t> payload(length);
   for (uint8_t &b : payload) {
     b = peek_byte();
-    if (b == 0xAA || b == 0x55) { // if the next byte is 0xAA or 0x55, bail
+    if (b == DELIMITER_1 ||
+        b == DELIMITER_2) { // if the next byte is DELIMITER_1 or DELIMITER_2,
+                            // bail
       throw std::system_error(EPROTO, std::generic_category());
     } else { // otherwise, pop it from the serial buffer
       read_byte();
     }
-    if (b == 0xBB) { // if an escape is found, read the next byte
+    if (b == ESCAPE) { // if an escape is found, read the next byte
       b = read_byte();
     }
   }
