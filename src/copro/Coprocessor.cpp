@@ -97,7 +97,8 @@ void Coprocessor::write(const std::vector<uint8_t> &message) {
 
   // check payload size
   if (payload.size() > std::numeric_limits<uint16_t>::max()) {
-    throw std::system_error(EOVERFLOW, std::generic_category());
+    throw std::system_error(EOVERFLOW, std::generic_category(),
+                            "payload size too big");
   }
 
   // create the header
@@ -105,26 +106,19 @@ void Coprocessor::write(const std::vector<uint8_t> &message) {
   // add the delimiter
   header.push_back(DELIMITER_1);
   header.push_back(DELIMITER_2);
-  // add the CRC16
-  vector_append(header, crc16(message));
   // add the length
   vector_append(header, static_cast<uint16_t>(payload.size()));
+  // add the CRC16
+  vector_append(header, crc16(message));
 
   // write
   if (m_serial.write(header.data(), header.size()) == PROS_ERR) {
-    throw std::system_error(errno, std::generic_category());
+    throw std::system_error(errno, std::generic_category(),
+                            "pros serial error");
   }
   if (m_serial.write(payload.data(), payload.size()) == PROS_ERR) {
-    throw std::system_error(errno, std::generic_category());
-  }
-}
-
-// sleep for a number of microseconds
-// WARNING: this spinlocks the scheduler
-static void usleep(uint64_t time) noexcept {
-  const uint64_t start = pros::micros();
-  while (pros::micros() - start < time) {
-    asm("nop");
+    throw std::system_error(errno, std::generic_category(),
+                            "pros serial error");
   }
 }
 
@@ -132,15 +126,16 @@ uint8_t Coprocessor::peek_byte() {
   int32_t raw = m_serial.peek_byte();
   // Handle timeout scenario with single retry
   if (raw == -1) {
-    usleep(m_timeout);
+    pros::delay(1);
     raw = m_serial.peek_byte();
     if (raw == -1) {
-      throw std::system_error(ENOLINK, std::generic_category());
+      throw std::system_error(ENOLINK, std::generic_category(), "timed out");
     }
   }
   // Handle PROS error
   if (raw == PROS_ERR) {
-    throw std::system_error(errno, std::generic_category());
+    throw std::system_error(errno, std::generic_category(),
+                            "pros serial error");
   }
   return static_cast<uint8_t>(raw);
 }
@@ -149,15 +144,16 @@ uint8_t Coprocessor::read_byte() {
   int32_t raw = m_serial.read_byte();
   // Handle timeout scenario with single retry
   if (raw == -1) {
-    usleep(m_timeout);
+    pros::delay(1);
     raw = m_serial.read_byte();
     if (raw == -1) {
-      throw std::system_error(ENOLINK, std::generic_category());
+      throw std::system_error(ENOLINK, std::generic_category(), "timed out");
     }
   }
   // Handle PROS error
   if (raw == PROS_ERR) {
-    throw std::system_error(errno, std::generic_category());
+    throw std::system_error(errno, std::generic_category(),
+                            "pros serial error");
   }
   return static_cast<uint8_t>(raw);
 }
@@ -178,10 +174,12 @@ std::vector<uint8_t> Coprocessor::read() {
   // check if there's data available
   const int avail = m_serial.get_read_avail();
   if (avail == 0) {
-    throw std::system_error(ENODATA, std::generic_category());
+    throw std::system_error(ENODATA, std::generic_category(),
+                            "no data available");
   }
   if (avail == PROS_ERR) {
-    throw std::system_error(errno, std::generic_category());
+    throw std::system_error(errno, std::generic_category(),
+                            "pros serial error, first");
   }
 
   // find the next delimiter
@@ -201,24 +199,29 @@ std::vector<uint8_t> Coprocessor::read() {
   uint16_t crc = read_stream<uint16_t>();
 
   // read the payload
-  std::vector<uint8_t> payload(length);
-  for (uint8_t &b : payload) {
-    b = peek_byte();
+  std::vector<uint8_t> payload;
+  for (int i = 0; i < length; ++i) {
+    const uint8_t b = peek_byte();
     if (b == DELIMITER_1 ||
         b == DELIMITER_2) { // if the next byte is DELIMITER_1 or DELIMITER_2,
                             // bail
-      throw std::system_error(EPROTO, std::generic_category());
+      throw std::system_error(EPROTO, std::generic_category(),
+                              "unescaped delimiter found");
     } else { // otherwise, pop it from the serial buffer
       read_byte();
     }
     if (b == ESCAPE) { // if an escape is found, read the next byte
-      b = read_byte();
+      ++i;
+      payload.push_back(read_byte());
+    } else {
+      payload.push_back(b);
     }
   }
 
   // validate payload with CRC
   if (crc != crc16(payload)) {
-    throw std::system_error(EBADMSG, std::generic_category());
+    throw std::system_error(EBADMSG, std::generic_category(),
+                            "CRC check failed");
   }
 
   // return payload
