@@ -157,4 +157,23 @@ Pose get_pose() {
           raw_pose.h * INT16_TO_DEG};
 }
 
+int set_pose(Pose pose) {
+  constexpr int ID = 8;
+  // cast
+  int rawX = static_cast<int>(pose.x * INCH_TO_INT16);
+  int rawY = static_cast<int>(pose.y * INCH_TO_INT16);
+  int rawH = static_cast<int>(pose.h * RAD_TO_INT16);
+  // init vector
+  std::vector<uint8_t> out(6);
+  // serialize
+  out.at(0) = rawX & 0xFF;
+  out.at(1) = (rawX >> 8) & 0xFF;
+  out.at(2) = rawY & 0xFF;
+  out.at(3) = (rawY >> 8) & 0xFF;
+  out.at(4) = rawH * 0xFF;
+  out.at(5) = (rawH >> 8) & 0xFF;
+  // write and get response
+  return write_and_receive(8, out, READ_TIMEOUT).at(0);
+}
+
 } // namespace otos
