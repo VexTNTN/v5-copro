@@ -2,6 +2,7 @@
 #include "copro/Coprocessor.hpp"
 #include "pros/rtos.hpp"
 #include <iostream>
+#include <system_error>
 
 namespace otos {
 
@@ -31,8 +32,9 @@ constexpr float INCH_TO_INT16 = 1.0 / INT16_TO_INCH;
 // util
 /////////////////
 
-static std::vector<uint8_t>
-write_and_receive(uint8_t id, const std::vector<uint8_t> &data, int timeout) {
+static std::vector<uint8_t> write_and_receive(uint8_t id,
+                                              const std::vector<uint8_t> &data,
+                                              int timeout) noexcept {
   // prepare data
   std::vector<uint8_t> out(data.size() + 1);
   out.push_back(id);
@@ -47,12 +49,16 @@ write_and_receive(uint8_t id, const std::vector<uint8_t> &data, int timeout) {
     } catch (std::system_error &e) {
       if (e.code().value() == ENODATA) {
         if (pros::millis() - start > timeout) {
-          throw e;
+          std::cout << e.code() << ", " << e.what() << std::endl;
+          errno = e.code().value();
+          return {};
         } else {
           continue;
         }
       } else {
-        throw e;
+        std::cout << e.code() << ", " << e.what() << std::endl;
+        errno = e.code().value();
+        return {};
       }
     }
   }
@@ -84,33 +90,33 @@ static T deserialize(const std::vector<uint8_t> &data) {
 // OTOS
 /////////////////
 
-int getStatus() {
+int getStatus() noexcept {
   constexpr int ID = 1;
-  try {
-    return static_cast<int>(write_and_receive(ID, {}, READ_TIMEOUT).at(0));
-  } catch (std::system_error &e) {
-    std::cout << e.code() << ", " << e.what() << std::endl;
+  auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+  if (raw.empty()) {
     return 1;
+  } else {
+    return static_cast<int>(raw.at(0));
   }
 }
 
-int selfTest() {
+int selfTest() noexcept {
   constexpr int ID = 24;
-  try {
-    return static_cast<int>(write_and_receive(ID, {}, READ_TIMEOUT).at(0));
-  } catch (std::system_error &e) {
-    std::cout << e.code() << ", " << e.what() << std::endl;
+  const auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+  if (raw.empty()) {
     return 1;
+  } else {
+    return static_cast<int>(raw.at(0));
   }
 }
 
-int resetTracking() {
+int resetTracking() noexcept {
   constexpr int ID = 3;
-  try {
-    return static_cast<int>(write_and_receive(ID, {}, READ_TIMEOUT).at(0));
-  } catch (std::system_error &e) {
-    std::cout << e.code() << ", " << e.what() << std::endl;
+  auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+  if (raw.empty()) {
     return 1;
+  } else {
+    return static_cast<int>(raw.at(0));
   }
 }
 
@@ -118,7 +124,7 @@ int resetTracking() {
 // pose
 /////////////////
 
-Pose get_pose() {
+Pose get_pose() noexcept {
   constexpr int ID = 7;
   constexpr Pose ERROR = {std::numeric_limits<float>::infinity(),
                           std::numeric_limits<float>::infinity(),
@@ -126,10 +132,8 @@ Pose get_pose() {
 
   std::vector<uint8_t> raw(6);
   // request, receive
-  try {
-    raw = write_and_receive(ID, {}, READ_TIMEOUT);
-  } catch (std::system_error &e) {
-    std::cout << e.code() << ", " << e.what() << std::endl;
+  auto tmp = write_and_receive(ID, {}, READ_TIMEOUT);
+  if (tmp.empty()) {
     return ERROR;
   }
 
@@ -157,7 +161,7 @@ Pose get_pose() {
           raw_pose.h * INT16_TO_DEG};
 }
 
-int set_pose(Pose pose) {
+int set_pose(Pose pose) noexcept {
   constexpr int ID = 8;
   // cast
   int rawX = static_cast<int>(pose.x * INCH_TO_INT16);
@@ -173,7 +177,68 @@ int set_pose(Pose pose) {
   out.at(4) = rawH * 0xFF;
   out.at(5) = (rawH >> 8) & 0xFF;
   // write and get response
-  return write_and_receive(8, out, READ_TIMEOUT).at(0);
+  auto raw = write_and_receive(8, out, READ_TIMEOUT);
+  if (raw.empty()) {
+    return 1;
+  } else {
+    return static_cast<int>(raw.at(0));
+  }
+}
+
+//////////////////////////////////////
+// linear scalar
+/////////////////
+
+float get_linear_scalar() noexcept {
+  constexpr int ID = 18;
+  auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+  if (raw.empty()) {
+    return std::numeric_limits<float>::infinity();
+  } else if (raw.at(0) == 0) {
+    return std::numeric_limits<float>::infinity();
+  } else {
+    return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
+  }
+}
+
+int set_linear_scalar(float scalar) noexcept {
+  constexpr int ID = 19;
+  auto raw =
+      static_cast<uint8_t>(static_cast<int8_t>(scalar - 1.0f) * 1000 + 0.5f);
+  auto err = write_and_receive(19, {raw}, READ_TIMEOUT);
+  if (err.empty()) {
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+//////////////////////////////////////
+// angular scalar
+/////////////////
+
+float get_angular_scalar() noexcept {
+  constexpr int ID = 20;
+  auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+  if (raw.empty()) {
+    return std::numeric_limits<float>::infinity();
+  } else if (raw.at(0) == 0) {
+    return std::numeric_limits<float>::infinity();
+  } else {
+    return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
+  }
+}
+
+int set_angular_scalar(float scalar) noexcept {
+  constexpr int ID = 21;
+  auto raw =
+      static_cast<uint8_t>(static_cast<int8_t>(scalar - 1.0f) * 1000 + 0.5f);
+  auto err = write_and_receive(19, {raw}, READ_TIMEOUT);
+  if (err.empty()) {
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 } // namespace otos
