@@ -1,6 +1,9 @@
 #include "copro/Coprocessor.hpp"
 #include "pros/error.h"
+#include "pros/rtos.hpp"
+#include "pros/serial.h"
 #include <cerrno>
+#include <limits>
 #include <system_error>
 #include <type_traits>
 
@@ -8,14 +11,17 @@
 
 namespace copro {
 
+// globals
 constexpr uint8_t DELIMITER_1 = 0xAA;
 constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
+static int PORT;
 
-Coprocessor::Coprocessor(int port, int baud)
-    // Calculate timeout for 10 bits/byte (8N1 format)
-    : m_serial(port, baud), m_timeout(10000000 / baud) {
-  m_serial.flush(); // clear the buffer
+void init(int _port, int baud) {
+  PORT = _port;
+  pros::c::serial_enable(PORT);
+  pros::c::serial_set_baudrate(PORT, baud);
+  pros::c::serial_flush(PORT);
 }
 
 /**
@@ -85,7 +91,7 @@ static void vector_append(std::vector<uint8_t> &v, const T &data) {
 
 // protocol:
 // [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
-void Coprocessor::write(const std::vector<uint8_t> &message) {
+void write(const std::vector<uint8_t> &message) {
   // stuff the message
   std::vector<uint8_t> payload;
   for (uint8_t b : message) {
@@ -112,22 +118,22 @@ void Coprocessor::write(const std::vector<uint8_t> &message) {
   vector_append(header, crc16(message));
 
   // write
-  if (m_serial.write(header.data(), header.size()) == PROS_ERR) {
+  if (pros::c::serial_write(PORT, header.data(), header.size()) == PROS_ERR) {
     throw std::system_error(errno, std::generic_category(),
                             "pros serial error");
   }
-  if (m_serial.write(payload.data(), payload.size()) == PROS_ERR) {
+  if (pros::c::serial_write(PORT, payload.data(), payload.size()) == PROS_ERR) {
     throw std::system_error(errno, std::generic_category(),
                             "pros serial error");
   }
 }
 
-uint8_t Coprocessor::peek_byte() {
-  int32_t raw = m_serial.peek_byte();
+static uint8_t peek_byte() {
+  int32_t raw = pros::c::serial_peek_byte(PORT);
   // Handle timeout scenario with single retry
   if (raw == -1) {
     pros::delay(1);
-    raw = m_serial.peek_byte();
+    raw = pros::c::serial_peek_byte(PORT);
     if (raw == -1) {
       throw std::system_error(ENOLINK, std::generic_category(), "timed out");
     }
@@ -140,12 +146,12 @@ uint8_t Coprocessor::peek_byte() {
   return static_cast<uint8_t>(raw);
 }
 
-uint8_t Coprocessor::read_byte() {
-  int32_t raw = m_serial.read_byte();
+static uint8_t read_byte() {
+  int32_t raw = pros::c::serial_read_byte(PORT);
   // Handle timeout scenario with single retry
   if (raw == -1) {
     pros::delay(1);
-    raw = m_serial.read_byte();
+    raw = pros::c::serial_read_byte(PORT);
     if (raw == -1) {
       throw std::system_error(ENOLINK, std::generic_category(), "timed out");
     }
@@ -158,7 +164,7 @@ uint8_t Coprocessor::read_byte() {
   return static_cast<uint8_t>(raw);
 }
 
-template <typename T> T Coprocessor::read_stream() {
+template <typename T> static T read_stream() {
   static_assert(std::is_trivially_copyable_v<T>,
                 "Type must be trivially copyable");
   std::array<uint8_t, sizeof(T)> raw;
@@ -170,9 +176,9 @@ template <typename T> T Coprocessor::read_stream() {
 
 // protocol:
 // [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
-std::vector<uint8_t> Coprocessor::read() {
+std::vector<uint8_t> read() {
   // check if there's data available
-  const int avail = m_serial.get_read_avail();
+  const int avail = pros::c::serial_get_read_avail(PORT);
   if (avail == 0) {
     throw std::system_error(ENODATA, std::generic_category(),
                             "no data available");
