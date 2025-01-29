@@ -58,6 +58,17 @@ write_and_receive(uint8_t id, const std::vector<uint8_t> &data, int timeout) {
   }
 }
 
+template <typename T> static std::vector<uint8_t> serialize(const T &data) {
+  static_assert(std::is_trivially_copyable_v<T>,
+                "Type must be trivially copyable");
+  auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
+  std::vector<uint8_t> out(sizeof(T));
+  for (int i = 0; i < sizeof(T); ++i) {
+    out.at(i) = raw.at(i);
+  }
+  return out;
+}
+
 template <typename T, int N>
 static T deserialize(const std::vector<uint8_t> &data) {
   static_assert(std::is_trivially_copyable_v<T>,
