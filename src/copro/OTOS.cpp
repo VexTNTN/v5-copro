@@ -162,7 +162,7 @@ int set_pose(Pose pose) {
   // cast
   int rawX = static_cast<int>(pose.x * INCH_TO_INT16);
   int rawY = static_cast<int>(pose.y * INCH_TO_INT16);
-  int rawH = static_cast<int>(pose.h * RAD_TO_INT16);
+  int rawH = static_cast<int>(pose.h * DEG_TO_INT16);
   // init vector
   std::vector<uint8_t> out(6);
   // serialize
