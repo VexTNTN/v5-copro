@@ -5,7 +5,7 @@
 
 void initialize() {
   pros::lcd::initialize();
-  copro::init(15, 921600);
+  copro::init(13, 921600);
 
   pros::delay(2000);
   std::cout << "initialized" << std::endl;
@@ -16,6 +16,7 @@ void initialize() {
 
   pros::delay(1000);
 
-  std::cout << otos::set_linear_scalar(1.1) << std::endl;
-  std::cout << otos::get_linear_scalar() << std::endl;
+  std::cout << otos::set_angular_scalar(1.1) << std::endl;
+  pros::delay(1);
+  std::cout << otos::get_angular_scalar() << std::endl;
 }

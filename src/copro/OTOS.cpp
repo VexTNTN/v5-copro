@@ -227,8 +227,6 @@ float get_linear_scalar() noexcept {
   auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
   if (raw.empty()) {
     return std::numeric_limits<float>::infinity();
-  } else if (raw.at(0) == 0) {
-    return std::numeric_limits<float>::infinity();
   } else {
     return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
   }
@@ -236,9 +234,8 @@ float get_linear_scalar() noexcept {
 
 int set_linear_scalar(float scalar) noexcept {
   constexpr int ID = 19;
-  auto raw =
-      static_cast<uint8_t>(static_cast<int8_t>(scalar - 1.0f) * 1000 + 0.5f);
-  auto err = write_and_receive(19, {raw}, READ_TIMEOUT);
+  auto raw = static_cast<uint8_t>((scalar - 1.0f) * 1000 + 0.5f);
+  auto err = write_and_receive(ID, {raw}, READ_TIMEOUT);
   if (err.empty()) {
     return PROS_ERR;
   } else {
@@ -255,8 +252,6 @@ float get_angular_scalar() noexcept {
   auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
   if (raw.empty()) {
     return std::numeric_limits<float>::infinity();
-  } else if (raw.at(0) == 0) {
-    return std::numeric_limits<float>::infinity();
   } else {
     return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
   }
@@ -264,9 +259,8 @@ float get_angular_scalar() noexcept {
 
 int set_angular_scalar(float scalar) noexcept {
   constexpr int ID = 21;
-  auto raw =
-      static_cast<uint8_t>(static_cast<int8_t>(scalar - 1.0f) * 1000 + 0.5f);
-  auto err = write_and_receive(19, {raw}, READ_TIMEOUT);
+  auto raw = static_cast<uint8_t>((scalar - 1.0f) * 1000 + 0.5f);
+  auto err = write_and_receive(ID, {raw}, READ_TIMEOUT);
   if (err.empty()) {
     return PROS_ERR;
   } else {
