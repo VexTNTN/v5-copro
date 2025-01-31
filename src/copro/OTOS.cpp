@@ -2,6 +2,7 @@
 #include "copro/Coprocessor.hpp"
 #include "pros/error.h"
 #include "pros/rtos.hpp"
+#include <cmath>
 #include <iostream>
 #include <system_error>
 
@@ -42,22 +43,20 @@ namespace otos {
 /////////////////
 constexpr int READ_TIMEOUT = 10;
 
-constexpr float RADIAN_TO_DEGREE = 180.0 / 3.14159;
-constexpr float DEGREE_TO_RADIAN = 3.14159 / 180.0;
+constexpr float kRadianToDegree = 180.0 / 3.14159;
+constexpr float kDegreeToRadian = 3.14159 / 180.0;
+constexpr float kMeterToInch = 39.3701;
+constexpr float kInchToMeter = 1.0 / kMeterToInch;
 
-constexpr float RAD_TO_INT16 = 32768.0 / 3.14159;
-constexpr float INT16_TO_RAD = 1.0 / RAD_TO_INT16;
-constexpr float INT16_TO_DEG = INT16_TO_RAD * RADIAN_TO_DEGREE;
-constexpr float DEG_TO_INT16 = 1.0 / INT16_TO_DEG;
+constexpr float kMeterToInt16 = 32768.0 / 10.0;
+constexpr float kInt16ToMeter = 1.0 / kMeterToInt16;
+constexpr float kInt16ToInch = kInt16ToMeter * kMeterToInch;
+constexpr float kInchToInt16 = 1.0 / kInt16ToInch;
 
-constexpr float METER_TO_INCH = 39.3701;
-constexpr float INCH_TO_METER = 1.0 / METER_TO_INCH;
-
-constexpr float METER_TO_INT16 = 32768.0 / 10.0;
-constexpr float INT16_TO_METER = 1.0 / METER_TO_INT16;
-
-constexpr float INT16_TO_INCH = INT16_TO_METER * METER_TO_INCH;
-constexpr float INCH_TO_INT16 = 1.0 / INT16_TO_INCH;
+constexpr float kRadToInt16 = 32768.0 / 3.14159;
+constexpr float kInt16ToRad = 1.0 / kRadToInt16;
+constexpr float kInt16ToDeg = kInt16ToRad * kRadianToDegree;
+constexpr float kDegToInt16 = 1.0 / kInt16ToDeg;
 
 //////////////////////////////////////
 // util
@@ -182,35 +181,30 @@ Pose get_pose() noexcept {
   }
 
   // parse raw data
-  struct RawPose {
-    int16_t x;
-    int16_t y;
-    int16_t h;
-  } raw_pose;
+  int16_t rawX = (tmp[1] << 8) | tmp[0];
+  int16_t rawY = (tmp[3] << 8) | tmp[2];
+  int16_t rawH = (tmp[5] << 8) | tmp[4];
 
-  raw_pose = deserialize<RawPose, 6>(tmp);
-
-  return {raw_pose.x * INT16_TO_INCH, raw_pose.y * INT16_TO_INCH,
-          raw_pose.h * INT16_TO_DEG};
+  return {rawX * kInt16ToInch, rawY * kInt16ToInch, rawH * kInt16ToDeg};
 }
 
 int set_pose(Pose pose) noexcept {
   constexpr int ID = 8;
   // cast
-  int rawX = static_cast<int>(pose.x * INCH_TO_INT16);
-  int rawY = static_cast<int>(pose.y * INCH_TO_INT16);
-  int rawH = static_cast<int>(pose.h * DEG_TO_INT16);
+  int16_t rawX = (pose.x * kInchToInt16);
+  int16_t rawY = (pose.y * kInchToInt16);
+  int16_t rawH = (pose.h * kDegToInt16);
   // init vector
-  std::vector<uint8_t> out(6);
+  std::vector<uint8_t> out(6, 0);
   // serialize
-  out.at(0) = rawX & 0xFF;
-  out.at(1) = (rawX >> 8) & 0xFF;
-  out.at(2) = rawY & 0xFF;
-  out.at(3) = (rawY >> 8) & 0xFF;
-  out.at(4) = rawH * 0xFF;
-  out.at(5) = (rawH >> 8) & 0xFF;
+  out[0] = rawX & 0xFF;
+  out[1] = (rawX >> 8) & 0xFF;
+  out[2] = rawY & 0xFF;
+  out[3] = (rawY >> 8) & 0xFF;
+  out[4] = rawH & 0xFF;
+  out[5] = (rawH >> 8) & 0xFF;
   // write and get response
-  auto raw = write_and_receive(8, out, READ_TIMEOUT);
+  auto raw = write_and_receive(ID, out, READ_TIMEOUT);
   if (raw.empty()) {
     return PROS_ERR;
   } else {
