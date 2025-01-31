@@ -9,6 +9,6 @@
 void initialize() {
 
   pros::lcd::initialize();
-  std::cout << "initializing: " << copro::init(13, 921600) << std::endl;
-  std::cout << "errno: " << errno << std::endl;
+  pros::lcd::print(0, "initializing: %d", copro::init(13, 921600));
+  pros::lcd::print(1, "errno: %d", errno);
 }

@@ -65,14 +65,14 @@ int init(int _port, int baud, int timeout) {
       code = errno;
       return;
     }
-    pros::delay(10);
+    pros::delay(50);
     // set serial port baud rate
     if (pros::c::serial_set_baudrate(PORT, baud) == PROS_ERR) {
       code = errno;
       return;
     }
     // flush serial buffer
-    pros::delay(10);
+    pros::delay(50);
     if (pros::c::serial_flush(PORT) == PROS_ERR) {
       code = errno;
       return;
@@ -103,13 +103,14 @@ int init(int _port, int baud, int timeout) {
       return PROS_ERR;
     }
     // if it's driver control, kill task and exit
-    if (pros::competition::get_status() == 4) {
+    if (pros::competition::get_status() == 4 ||
+        pros::competition::get_status() == 0) {
       t.remove();
       errno = EINTR;
       return PROS_ERR;
     }
     // if the timeout has been reached, kill task and exit
-    if (pros::millis() - start > timeout) {
+    if (pros::millis() - start > timeout && timeout != -1) {
       t.remove();
       errno = ETIMEDOUT;
       return PROS_ERR;
