@@ -2,7 +2,6 @@
 #include "pros/error.h"
 #include "pros/rtos.hpp"
 #include "pros/serial.h"
-#include "pros/serial.hpp"
 #include <cerrno>
 #include <limits>
 #include <system_error>
