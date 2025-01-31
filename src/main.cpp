@@ -55,7 +55,11 @@ void initialize() {
   pros::delay(100);
 
   std::cout << "getting pose: " << std::endl;
-  otos::Pose pose = otos::get_pose();
-  std::cout << "x: " << pose.x << ", y: " << pose.y << ", h: " << pose.h
-            << std::endl;
+
+  while (true) {
+    otos::Pose pose = otos::get_pose();
+    std::cout << "x: " << pose.x << ", y: " << pose.y << ", h: " << pose.h
+              << std::endl;
+    pros::delay(10);
+  }
 }

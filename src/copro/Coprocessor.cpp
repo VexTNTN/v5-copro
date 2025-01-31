@@ -2,6 +2,7 @@
 #include "pros/error.h"
 #include "pros/rtos.hpp"
 #include "pros/serial.h"
+#include "pros/serial.hpp"
 #include <cerrno>
 #include <limits>
 #include <system_error>
@@ -17,11 +18,53 @@ constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
 static int PORT;
 
+static std::vector<uint8_t> write_and_receive(uint8_t id,
+                                              const std::vector<uint8_t> &data,
+                                              int timeout) noexcept {
+  // prepare data
+  std::vector<uint8_t> out;
+  out.push_back(id);
+  out.insert(out.end(), data.begin(), data.end());
+  // write data
+  copro::write(out);
+  // wait for a response
+  const int start = pros::millis();
+  while (true) {
+    try {
+      auto raw = copro::read();
+      std::vector<uint8_t> rtn;
+      rtn.insert(rtn.end(), raw.begin() + 1, raw.end());
+      return rtn;
+    } catch (std::system_error &e) {
+      if (e.code().value() == ENODATA) {
+        if (pros::millis() - start > timeout) {
+          errno = e.code().value();
+          return {};
+        } else {
+          continue;
+        }
+      } else {
+        errno = e.code().value();
+        return {};
+      }
+    }
+  }
+}
+
 void init(int _port, int baud) {
   PORT = _port;
   pros::c::serial_enable(PORT);
+  pros::delay(1000);
   pros::c::serial_set_baudrate(PORT, baud);
+  pros::delay(1000);
   pros::c::serial_flush(PORT);
+
+  while (true) {
+    // send a ping, once we get a response, we know the pi has booted
+    auto err = write_and_receive(29, {}, 1000);
+    if (!err.empty())
+      break;
+  }
 }
 
 /**
@@ -135,6 +178,7 @@ static uint8_t peek_byte() {
     pros::delay(1);
     raw = pros::c::serial_peek_byte(PORT);
     if (raw == -1) {
+      pros::c::serial_flush(PORT);
       throw std::system_error(ENOLINK, std::generic_category(), "timed out");
     }
   }
@@ -153,6 +197,7 @@ static uint8_t read_byte() {
     pros::delay(1);
     raw = pros::c::serial_read_byte(PORT);
     if (raw == -1) {
+      pros::c::serial_flush(PORT);
       throw std::system_error(ENOLINK, std::generic_category(), "timed out");
     }
   }

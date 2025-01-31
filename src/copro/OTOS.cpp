@@ -20,10 +20,10 @@
 // otos::getVelocityStdDev,       // 11 // low prio
 // otos::getAcceleration,         // 12 // low prio
 // otos::getAccelerationStdDev,   // 13 // low prio
-// otos::getLinearUnit,           // 14 // low prio
-// otos::setLinearUnit,           // 15 // low prio
-// otos::getAngularUnit,          // 16 // low prio
-// otos::setAngularUnit,          // 17 // low prio
+// otos::getLinearUnit,           // 14 // unnecessary
+// otos::setLinearUnit,           // 15 // unnecessary
+// otos::getAngularUnit,          // 16 // unnecessary
+// otos::setAngularUnit,          // 17 // unnecessary
 // otos::getLinearScalar,         // 18 // done
 // otos::setLinearScalar,         // 19 // done
 // otos::getAngularScalar,        // 20 // done
@@ -32,16 +32,16 @@
 // otos::setSignalProcessConfig,  // 23 // low prio
 // otos::selfTest,                // 24 // done
 // otos::calibrate,               // 25 // done
-// otos::isCalibrated,            // 26 // hi prio
-// otos::getOffset,               // 27 // lo prio
-// otos::setOffset                // 28 // hi prio
+// otos::isCalibrated,            // 26 // done
+// otos::getOffset,               // 27 // impossible until FW bug fixed
+// otos::setOffset                // 28 // done
 
 namespace otos {
 
 //////////////////////////////////////
 // constants
 /////////////////
-constexpr int READ_TIMEOUT = 10;
+constexpr int READ_TIMEOUT = 5;
 
 constexpr float kRadianToDegree = 180.0 / 3.14159;
 constexpr float kDegreeToRadian = 3.14159 / 180.0;
