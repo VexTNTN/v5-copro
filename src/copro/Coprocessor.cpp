@@ -1,5 +1,6 @@
 #include "copro/Coprocessor.hpp"
 #include "pros/error.h"
+#include "pros/misc.hpp"
 #include "pros/rtos.hpp"
 #include "pros/serial.h"
 #include <cerrno>
@@ -50,19 +51,71 @@ static std::vector<uint8_t> write_and_receive(uint8_t id,
   }
 }
 
-void init(int _port, int baud) {
-  PORT = _port;
-  pros::c::serial_enable(PORT);
-  pros::delay(100);
-  pros::c::serial_set_baudrate(PORT, baud);
-  pros::delay(100);
-  pros::c::serial_flush(PORT);
+int init(int _port, int baud, int timeout) {
+  const int start = pros::millis();
+  bool success = false;
+  int code = 0;
+  // run the actual initialization stuff in a task
+  // this way we can kill it immediately when needed
+  pros::Task t([&]() {
+    // init static vars
+    PORT = _port;
+    // enable serial port
+    if (pros::c::serial_enable(PORT) == PROS_ERR) {
+      code = errno;
+      return;
+    }
+    pros::delay(10);
+    // set serial port baud rate
+    if (pros::c::serial_set_baudrate(PORT, baud) == PROS_ERR) {
+      code = errno;
+      return;
+    }
+    // flush serial buffer
+    pros::delay(10);
+    if (pros::c::serial_flush(PORT) == PROS_ERR) {
+      code = errno;
+      return;
+    }
+    pros::delay(10);
+    // wait for the pi to boot
+    while (true) {
+      auto err = write_and_receive(29, {}, 10);
+      if (!err.empty()) {
+        success = true;
+        return;
+      } else if (errno != ENODATA) {
+        code = errno;
+        return;
+      }
+    }
+  });
 
+  // continuously check whether the conditions for initialization are met
   while (true) {
-    // send a ping, once we get a response, we know the pi has booted
-    auto err = write_and_receive(29, {}, 100);
-    if (!err.empty())
-      break;
+    // if initialization is successful, exit
+    if (success) {
+      return 0;
+    }
+    // if there was an error, exit
+    if (code != 0) {
+      errno = code;
+      return PROS_ERR;
+    }
+    // if it's driver control, kill task and exit
+    if (pros::competition::get_status() == 4) {
+      t.remove();
+      errno = EINTR;
+      return PROS_ERR;
+    }
+    // if the timeout has been reached, kill task and exit
+    if (pros::millis() - start > timeout) {
+      t.remove();
+      errno = ETIMEDOUT;
+      return PROS_ERR;
+    }
+    // delay to save resources
+    pros::delay(10);
   }
 }
 
