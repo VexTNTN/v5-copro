@@ -54,9 +54,9 @@ static std::vector<uint8_t> write_and_receive(uint8_t id,
 void init(int _port, int baud) {
   PORT = _port;
   pros::c::serial_enable(PORT);
-  pros::delay(1000);
+  pros::delay(100);
   pros::c::serial_set_baudrate(PORT, baud);
-  pros::delay(1000);
+  pros::delay(100);
   pros::c::serial_flush(PORT);
 
   while (true) {
