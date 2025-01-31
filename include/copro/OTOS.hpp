@@ -8,7 +8,15 @@ struct Pose {
   float h;
 };
 
-int getStatus() noexcept;
+struct Status {
+  bool warn_tilt_angle;
+  bool warn_optical_tracking;
+  bool optical_fatal;
+  bool imu_fatal;
+  bool pros_error;
+};
+
+Status getStatus() noexcept;
 
 int selfTest() noexcept;
 
@@ -21,6 +29,12 @@ int resetTracking() noexcept;
 Pose get_pose() noexcept;
 
 int set_pose(Pose pose) noexcept;
+
+//////////////////////////////////////
+// offset
+/////////////////
+
+int set_offset(Pose pose) noexcept;
 
 //////////////////////////////////////
 // linear scalar

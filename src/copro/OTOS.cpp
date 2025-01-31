@@ -123,13 +123,27 @@ static T deserialize(const std::vector<uint8_t> &data) {
 // OTOS
 /////////////////
 
-int getStatus() noexcept {
+Status getStatus() noexcept {
   constexpr int ID = 1;
+  union {
+    struct {
+      uint8_t warn_tilt_angle : 1;
+      uint8_t warn_optical_tracking : 1;
+      uint8_t reserved : 4;
+      uint8_t optical_fatal : 1;
+      uint8_t imu_fatal : 1;
+    };
+    uint8_t value;
+  } s;
   auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
   if (raw.empty()) {
-    return 1;
+    return {0, 0, 0, 0, 1};
   } else {
-    return static_cast<int>(raw.at(0));
+    s.value = raw.at(0);
+    return {static_cast<bool>(s.warn_tilt_angle),
+            static_cast<bool>(s.warn_optical_tracking),
+            static_cast<bool>(s.optical_fatal), static_cast<bool>(s.imu_fatal),
+            0};
   }
 }
 
@@ -190,6 +204,34 @@ Pose get_pose() noexcept {
 
 int set_pose(Pose pose) noexcept {
   constexpr int ID = 8;
+  // cast
+  int16_t rawX = (pose.x * kInchToInt16);
+  int16_t rawY = (pose.y * kInchToInt16);
+  int16_t rawH = (pose.h * kDegToInt16);
+  // init vector
+  std::vector<uint8_t> out(6, 0);
+  // serialize
+  out[0] = rawX & 0xFF;
+  out[1] = (rawX >> 8) & 0xFF;
+  out[2] = rawY & 0xFF;
+  out[3] = (rawY >> 8) & 0xFF;
+  out[4] = rawH & 0xFF;
+  out[5] = (rawH >> 8) & 0xFF;
+  // write and get response
+  auto raw = write_and_receive(ID, out, READ_TIMEOUT);
+  if (raw.empty()) {
+    return PROS_ERR;
+  } else {
+    return static_cast<int>(raw.at(0));
+  }
+}
+
+//////////////////////////////////////
+// offset
+/////////////////
+
+int set_offset(Pose pose) noexcept {
+  constexpr int ID = 28;
   // cast
   int16_t rawX = (pose.x * kInchToInt16);
   int16_t rawY = (pose.y * kInchToInt16);
