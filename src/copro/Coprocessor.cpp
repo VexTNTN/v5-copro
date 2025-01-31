@@ -61,7 +61,7 @@ void init(int _port, int baud) {
 
   while (true) {
     // send a ping, once we get a response, we know the pi has booted
-    auto err = write_and_receive(29, {}, 1000);
+    auto err = write_and_receive(29, {}, 100);
     if (!err.empty())
       break;
   }
