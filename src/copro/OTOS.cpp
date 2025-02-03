@@ -43,20 +43,18 @@ namespace otos {
 /////////////////
 constexpr int READ_TIMEOUT = 5;
 
-constexpr float kRadianToDegree = 180.0 / 3.14159;
-constexpr float kDegreeToRadian = 3.14159 / 180.0;
-constexpr float kMeterToInch = 39.3701;
-constexpr float kInchToMeter = 1.0 / kMeterToInch;
+constexpr float RADIAN_TO_DEGREE = 180.0 / 3.14159;
+constexpr float METER_TO_INCH = 39.3701;
 
-constexpr float kMeterToInt16 = 32768.0 / 10.0;
-constexpr float kInt16ToMeter = 1.0 / kMeterToInt16;
-constexpr float kInt16ToInch = kInt16ToMeter * kMeterToInch;
-constexpr float kInchToInt16 = 1.0 / kInt16ToInch;
+constexpr float METER_TO_INT16 = 32768.0 / 10.0;
+constexpr float INT16_TO_METER = 1.0 / METER_TO_INT16;
+constexpr float INT16_TO_INCH = INT16_TO_METER * METER_TO_INCH;
+constexpr float INCH_TO_INT16 = 1.0 / INT16_TO_INCH;
 
-constexpr float kRadToInt16 = 32768.0 / 3.14159;
-constexpr float kInt16ToRad = 1.0 / kRadToInt16;
-constexpr float kInt16ToDeg = kInt16ToRad * kRadianToDegree;
-constexpr float kDegToInt16 = 1.0 / kInt16ToDeg;
+constexpr float RAD_TO_INT16 = 32768.0 / 3.14159;
+constexpr float INT16_TO_RAD = 1.0 / RAD_TO_INT16;
+constexpr float INT16_TO_DEG = INT16_TO_RAD * RADIAN_TO_DEGREE;
+constexpr float DEG_TO_INT16 = 1.0 / INT16_TO_DEG;
 
 //////////////////////////////////////
 // util
@@ -199,15 +197,15 @@ Pose get_pose() noexcept {
   int16_t rawY = (tmp[3] << 8) | tmp[2];
   int16_t rawH = (tmp[5] << 8) | tmp[4];
 
-  return {rawX * kInt16ToInch, rawY * kInt16ToInch, rawH * kInt16ToDeg};
+  return {rawX * INT16_TO_INCH, rawY * INT16_TO_INCH, rawH * INT16_TO_DEG};
 }
 
 int set_pose(Pose pose) noexcept {
   constexpr int ID = 8;
   // cast
-  int16_t rawX = (pose.x * kInchToInt16);
-  int16_t rawY = (pose.y * kInchToInt16);
-  int16_t rawH = (pose.h * kDegToInt16);
+  int16_t rawX = (pose.x * INCH_TO_INT16);
+  int16_t rawY = (pose.y * INCH_TO_INT16);
+  int16_t rawH = (pose.h * DEG_TO_INT16);
   // init vector
   std::vector<uint8_t> out(6, 0);
   // serialize
@@ -233,9 +231,9 @@ int set_pose(Pose pose) noexcept {
 int set_offset(Pose pose) noexcept {
   constexpr int ID = 28;
   // cast
-  int16_t rawX = (pose.x * kInchToInt16);
-  int16_t rawY = (pose.y * kInchToInt16);
-  int16_t rawH = (pose.h * kDegToInt16);
+  int16_t rawX = (pose.x * INCH_TO_INT16);
+  int16_t rawY = (pose.y * INCH_TO_INT16);
+  int16_t rawH = (pose.h * DEG_TO_INT16);
   // init vector
   std::vector<uint8_t> out(6, 0);
   // serialize
