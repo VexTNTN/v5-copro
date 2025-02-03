@@ -4,8 +4,12 @@
 #include <cstdint>
 #include <vector>
 #include <limits>
+#include <algorithm>
 
 namespace copro {
+
+// TODO: make a struct with the serialization/deserialization functions instead
+// but still have it be compile-time polymorphism.
 
 /**
  * @brief serialize data
@@ -43,6 +47,17 @@ template <typename T> T deserialize(const std::vector<uint8_t>& data) {
 }
 
 /**
+ * Literal class type that wraps a constant expression string.
+ *
+ * Uses implicit conversion to allow templates to *seemingly* accept constant strings.
+ */
+template <size_t N> struct StringLiteral {
+        constexpr StringLiteral(const char (&str)[N]) { std::copy_n(str, N, value); }
+
+        char value[N];
+};
+
+/**
  * @brief Coprocessor class. Simplifies interactions with a coprocessor over a smart port
  *
  */
@@ -60,21 +75,22 @@ class Coprocessor {
          */
         int initialize(int timeout = std::numeric_limits<int>::max());
 
+        std::vector<uint8_t> write_and_receive(const std::string& topic, const std::vector<uint8_t>& data, int timeout);
+
         /**
-         * @brief write a packet, and receive a packet
+         * @brief send data of an arbitrary type, and receive data of an arbitrary type
          *
-         * @param topic
+         * @tparam topic
+         * @tparam T
+         * @tparam R
          * @param data
          * @param timeout
-         * @return std::vector<uint8_t>
+         * @return T
          */
-        template <typename T, typename R> T write_and_receive(const std::string& topic, R data, int timeout) {
-            return deserialize<R>(internal_write_and_receive(topic, serialize(data), timeout));
+        template <StringLiteral topic, typename T, typename R> R write_and_receive(T data, int timeout) {
+            return deserialize<R>(write_and_receive(topic, serialize<T>(data), timeout));
         }
     private:
-        std::vector<uint8_t> internal_write_and_receive(const std::string& topic, const std::vector<uint8_t>& data,
-                                                        int timeout);
-
         const int baud_rate;
         const int m_port;
         pros::Mutex m_mutex;

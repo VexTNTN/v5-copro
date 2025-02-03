@@ -191,8 +191,8 @@ static void write(const std::vector<uint8_t>& message, int port) {
 // global functions
 /////////////////
 
-std::vector<uint8_t> Coprocessor::internal_write_and_receive(const std::string& topic, const std::vector<uint8_t>& data,
-                                                             int timeout) {
+std::vector<uint8_t> Coprocessor::write_and_receive(const std::string& topic, const std::vector<uint8_t>& data,
+                                                    int timeout) {
     // prepare data
     std::vector<uint8_t> out;
     out.push_back(id);
@@ -250,7 +250,7 @@ int Coprocessor::initialize(int timeout) {
         pros::delay(10);
         // wait for the pi to boot
         while (true) {
-            auto err = internal_write_and_receive("ping", {}, 10);
+            auto err = write_and_receive("ping", {}, 10);
             if (!err.empty()) {
                 success = true;
                 return;
