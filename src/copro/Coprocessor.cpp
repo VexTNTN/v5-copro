@@ -19,12 +19,6 @@ constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
 
 //////////////////////////////////////
-// static vars
-/////////////////
-
-static int PORT;
-
-//////////////////////////////////////
 // util functions
 /////////////////
 
@@ -81,14 +75,14 @@ template <typename T> static void vector_append(std::vector<uint8_t>& v, const T
 // i/o helpers
 /////////////////
 
-static uint8_t peek_byte() {
-    int32_t raw = pros::c::serial_peek_byte(PORT);
+static uint8_t peek_byte(int port) {
+    int32_t raw = pros::c::serial_peek_byte(port);
     // Handle timeout scenario with single retry
     if (raw == -1) {
         pros::delay(1);
-        raw = pros::c::serial_peek_byte(PORT);
+        raw = pros::c::serial_peek_byte(port);
         if (raw == -1) {
-            pros::c::serial_flush(PORT);
+            pros::c::serial_flush(port);
             throw std::system_error(ENOLINK, std::generic_category(), "timed out");
         }
     }
@@ -97,14 +91,14 @@ static uint8_t peek_byte() {
     return static_cast<uint8_t>(raw);
 }
 
-static uint8_t read_byte() {
-    int32_t raw = pros::c::serial_read_byte(PORT);
+static uint8_t read_byte(int port) {
+    int32_t raw = pros::c::serial_read_byte(port);
     // Handle timeout scenario with single retry
     if (raw == -1) {
         pros::delay(1);
-        raw = pros::c::serial_read_byte(PORT);
+        raw = pros::c::serial_read_byte(port);
         if (raw == -1) {
-            pros::c::serial_flush(PORT);
+            pros::c::serial_flush(port);
             throw std::system_error(ENOLINK, std::generic_category(), "timed out");
         }
     }
@@ -113,44 +107,44 @@ static uint8_t read_byte() {
     return static_cast<uint8_t>(raw);
 }
 
-template <typename T> static T read_stream() {
+template <typename T> static T read_stream(int port) {
     static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
     std::array<uint8_t, sizeof(T)> raw;
-    for (uint8_t& b : raw) { b = read_byte(); }
+    for (uint8_t& b : raw) b = read_byte(port);
     return std::bit_cast<T>(raw);
 }
 
-static std::vector<uint8_t> read() {
+static std::vector<uint8_t> read(int port) {
     // check if there's data available
-    const int avail = pros::c::serial_get_read_avail(PORT);
+    const int avail = pros::c::serial_get_read_avail(port);
     if (avail == 0) { throw std::system_error(ENODATA, std::generic_category(), "no data available"); }
     if (avail == PROS_ERR) { throw std::system_error(errno, std::generic_category(), "pros serial error, first"); }
 
     // find the next delimiter
     while (true) {
         // find DELIMITER_1
-        if (read_byte() != DELIMITER_1) { continue; }
+        if (read_byte(port) != DELIMITER_1) continue;
         // if the next byte is DELIMITER_2, we've found the delimiter
-        if (read_byte() == DELIMITER_2) { break; }
+        if (read_byte(port) == DELIMITER_2) break;
     }
 
     // read the header
-    uint16_t length = read_stream<uint16_t>();
-    uint16_t crc = read_stream<uint16_t>();
+    auto length = read_stream<uint16_t>(port);
+    auto crc = read_stream<uint16_t>(port);
 
     // read the payload
     std::vector<uint8_t> payload;
     for (int i = 0; i < length; ++i) {
-        const uint8_t b = peek_byte();
+        const uint8_t b = peek_byte(port);
         if (b == DELIMITER_1 || b == DELIMITER_2) { // if the next byte is DELIMITER_1 or DELIMITER_2,
                                                     // bail
             throw std::system_error(EPROTO, std::generic_category(), "unescaped delimiter found");
         } else { // otherwise, pop it from the serial buffer
-            read_byte();
+            read_byte(port);
         }
         if (b == ESCAPE) { // if an escape is found, read the next byte
             ++i;
-            payload.push_back(read_byte());
+            payload.push_back(read_byte(port));
         } else {
             payload.push_back(b);
         }
@@ -163,7 +157,7 @@ static std::vector<uint8_t> read() {
     return payload;
 }
 
-static void write(const std::vector<uint8_t>& message) {
+static void write(const std::vector<uint8_t>& message, int port) {
     // stuff the message
     std::vector<uint8_t> payload;
     for (uint8_t b : message) {
@@ -187,30 +181,28 @@ static void write(const std::vector<uint8_t>& message) {
     vector_append(header, crc16(message));
 
     // write
-    if (pros::c::serial_write(PORT, header.data(), header.size()) == PROS_ERR) {
+    if (pros::c::serial_write(port, header.data(), header.size()) == PROS_ERR)
         throw std::system_error(errno, std::generic_category(), "pros serial error");
-    }
-    if (pros::c::serial_write(PORT, payload.data(), payload.size()) == PROS_ERR) {
+    if (pros::c::serial_write(port, payload.data(), payload.size()) == PROS_ERR)
         throw std::system_error(errno, std::generic_category(), "pros serial error");
-    }
 }
 
 //////////////////////////////////////
 // global functions
 /////////////////
 
-std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout) {
+std::vector<uint8_t> Coprocessor::write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout) {
     // prepare data
     std::vector<uint8_t> out;
     out.push_back(id);
     out.insert(out.end(), data.begin(), data.end());
     // write data
-    write(out);
+    write(out, m_port);
     // wait for a response
     const int start = pros::millis();
     while (true) {
         try {
-            auto raw = read();
+            auto raw = read(m_port);
             std::vector<uint8_t> rtn;
             rtn.insert(rtn.end(), raw.begin() + 1, raw.end());
             return rtn;
@@ -230,29 +222,27 @@ std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& d
     }
 }
 
-int initialize(int _port, int baud, int timeout) {
+int Coprocessor::initialize(int timeout) {
     const int start = pros::millis();
     bool success = false;
     int code = 0;
     // run the actual initialization stuff in a task
     // this way we can kill it immediately when needed
     pros::Task t([&]() {
-        // init static vars
-        PORT = _port;
         // enable serial port
-        if (pros::c::serial_enable(PORT) == PROS_ERR) {
+        if (pros::c::serial_enable(m_port) == PROS_ERR) {
             code = errno;
             return;
         }
         pros::delay(50);
         // set serial port baud rate
-        if (pros::c::serial_set_baudrate(PORT, baud) == PROS_ERR) {
+        if (pros::c::serial_set_baudrate(m_port, baud) == PROS_ERR) {
             code = errno;
             return;
         }
         // flush serial buffer
         pros::delay(50);
-        if (pros::c::serial_flush(PORT) == PROS_ERR) {
+        if (pros::c::serial_flush(m_port) == PROS_ERR) {
             code = errno;
             return;
         }
