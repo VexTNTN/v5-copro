@@ -156,7 +156,7 @@ template <typename T> static T read_stream() {
     return std::bit_cast<T>(raw);
 }
 
-std::vector<uint8_t> read() {
+static std::vector<uint8_t> read() {
     // check if there's data available
     const int avail = pros::c::serial_get_read_avail(PORT);
     if (avail == 0) { throw std::system_error(ENODATA, std::generic_category(), "no data available"); }
