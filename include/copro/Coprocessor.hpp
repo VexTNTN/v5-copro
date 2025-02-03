@@ -4,6 +4,7 @@
 #include <vector>
 
 namespace copro {
+std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout);
 /**
  * @brief initialize comms with the coprocessor.
  *
@@ -23,5 +24,4 @@ namespace copro {
  * to disable. -1 by default
  */
 int init(int port, int baud, int timeout = -1);
-std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout) noexcept;
 } // namespace copro

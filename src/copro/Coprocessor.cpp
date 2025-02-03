@@ -51,72 +51,6 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
     return crc;
 }
 
-int init(int _port, int baud, int timeout) {
-    const int start = pros::millis();
-    bool success = false;
-    int code = 0;
-    // run the actual initialization stuff in a task
-    // this way we can kill it immediately when needed
-    pros::Task t([&]() {
-        // init static vars
-        PORT = _port;
-        // enable serial port
-        if (pros::c::serial_enable(PORT) == PROS_ERR) {
-            code = errno;
-            return;
-        }
-        pros::delay(50);
-        // set serial port baud rate
-        if (pros::c::serial_set_baudrate(PORT, baud) == PROS_ERR) {
-            code = errno;
-            return;
-        }
-        // flush serial buffer
-        pros::delay(50);
-        if (pros::c::serial_flush(PORT) == PROS_ERR) {
-            code = errno;
-            return;
-        }
-        pros::delay(10);
-        // wait for the pi to boot
-        while (true) {
-            auto err = write_and_receive(29, {}, 10);
-            if (!err.empty()) {
-                success = true;
-                return;
-            } else if (errno != ENODATA) {
-                code = errno;
-                return;
-            }
-        }
-    });
-
-    // continuously check whether the conditions for initialization are met
-    while (true) {
-        // if initialization is successful, exit
-        if (success) { return 0; }
-        // if there was an error, exit
-        if (code != 0) {
-            errno = code;
-            return PROS_ERR;
-        }
-        // if it's driver control, kill task and exit
-        if (pros::competition::get_status() == 4 || pros::competition::get_status() == 0) {
-            t.remove();
-            errno = EINTR;
-            return PROS_ERR;
-        }
-        // if the timeout has been reached, kill task and exit
-        if (pros::millis() - start > timeout && timeout != -1) {
-            t.remove();
-            errno = ETIMEDOUT;
-            return PROS_ERR;
-        }
-        // delay to save resources
-        pros::delay(10);
-    }
-}
-
 static uint8_t peek_byte() {
     int32_t raw = pros::c::serial_peek_byte(PORT);
     // Handle timeout scenario with single retry
@@ -245,7 +179,7 @@ static void write(const std::vector<uint8_t>& message) {
     }
 }
 
-std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout) noexcept {
+std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout){
     // prepare data
     std::vector<uint8_t> out;
     out.push_back(id);
@@ -273,6 +207,72 @@ std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& d
                 return {};
             }
         }
+    }
+}
+
+int init(int _port, int baud, int timeout) {
+    const int start = pros::millis();
+    bool success = false;
+    int code = 0;
+    // run the actual initialization stuff in a task
+    // this way we can kill it immediately when needed
+    pros::Task t([&]() {
+        // init static vars
+        PORT = _port;
+        // enable serial port
+        if (pros::c::serial_enable(PORT) == PROS_ERR) {
+            code = errno;
+            return;
+        }
+        pros::delay(50);
+        // set serial port baud rate
+        if (pros::c::serial_set_baudrate(PORT, baud) == PROS_ERR) {
+            code = errno;
+            return;
+        }
+        // flush serial buffer
+        pros::delay(50);
+        if (pros::c::serial_flush(PORT) == PROS_ERR) {
+            code = errno;
+            return;
+        }
+        pros::delay(10);
+        // wait for the pi to boot
+        while (true) {
+            auto err = write_and_receive(29, {}, 10);
+            if (!err.empty()) {
+                success = true;
+                return;
+            } else if (errno != ENODATA) {
+                code = errno;
+                return;
+            }
+        }
+    });
+
+    // continuously check whether the conditions for initialization are met
+    while (true) {
+        // if initialization is successful, exit
+        if (success) { return 0; }
+        // if there was an error, exit
+        if (code != 0) {
+            errno = code;
+            return PROS_ERR;
+        }
+        // if it's driver control, kill task and exit
+        if (pros::competition::get_status() == 4 || pros::competition::get_status() == 0) {
+            t.remove();
+            errno = EINTR;
+            return PROS_ERR;
+        }
+        // if the timeout has been reached, kill task and exit
+        if (pros::millis() - start > timeout && timeout != -1) {
+            t.remove();
+            errno = ETIMEDOUT;
+            return PROS_ERR;
+        }
+        // delay to save resources
+        pros::delay(10);
     }
 }
 } // namespace copro
