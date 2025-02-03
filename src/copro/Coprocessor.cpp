@@ -191,7 +191,8 @@ static void write(const std::vector<uint8_t>& message, int port) {
 // global functions
 /////////////////
 
-std::vector<uint8_t> Coprocessor::write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout) {
+std::vector<uint8_t> Coprocessor::internal_write_and_receive(const std::string& topic, const std::vector<uint8_t>& data,
+                                                             int timeout) {
     // prepare data
     std::vector<uint8_t> out;
     out.push_back(id);
@@ -236,7 +237,7 @@ int Coprocessor::initialize(int timeout) {
         }
         pros::delay(50);
         // set serial port baud rate
-        if (pros::c::serial_set_baudrate(m_port, baud) == PROS_ERR) {
+        if (pros::c::serial_set_baudrate(m_port, baud_rate) == PROS_ERR) {
             code = errno;
             return;
         }
@@ -249,7 +250,7 @@ int Coprocessor::initialize(int timeout) {
         pros::delay(10);
         // wait for the pi to boot
         while (true) {
-            auto err = write_and_receive(29, {}, 10);
+            auto err = internal_write_and_receive("ping", {}, 10);
             if (!err.empty()) {
                 success = true;
                 return;
