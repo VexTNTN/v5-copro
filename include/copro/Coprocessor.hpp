@@ -23,5 +23,5 @@ std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& d
  * @param timeout max time that can be taken to initialize, in milliseconds. -1
  * to disable. -1 by default
  */
-int init(int port, int baud, int timeout = -1);
+int initialize(int port, int baud, int timeout = -1);
 } // namespace copro

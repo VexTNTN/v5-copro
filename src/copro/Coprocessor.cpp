@@ -230,7 +230,7 @@ std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& d
     }
 }
 
-int init(int _port, int baud, int timeout) {
+int initialize(int _port, int baud, int timeout) {
     const int start = pros::millis();
     bool success = false;
     int code = 0;
