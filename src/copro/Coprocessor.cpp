@@ -10,11 +10,23 @@
 
 namespace copro {
 
-// globals
+//////////////////////////////////////
+// constants
+/////////////////
+
 constexpr uint8_t DELIMITER_1 = 0xAA;
 constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
+
+//////////////////////////////////////
+// static vars
+/////////////////
+
 static int PORT;
+
+//////////////////////////////////////
+// util functions
+/////////////////
 
 /**
  * @brief calculate a CRC16 using CCITT-FALSE
@@ -50,6 +62,24 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
     for (uint8_t byte : data) { crc = (crc << 8) ^ table[((crc >> 8) ^ byte) & 0xFF]; }
     return crc;
 }
+
+/**
+ * @brief serialize an instance of a trivially-copyable datatype, and add it to
+ * a vector
+ *
+ * @tparam T the datatype
+ * @param v the vector to add to
+ * @param data the data to serialize
+ */
+template <typename T> static void vector_append(std::vector<uint8_t>& v, const T& data) {
+    static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+    const auto raw = std::bit_cast<std::array<const uint8_t, sizeof(T)>>(data);
+    for (uint8_t b : raw) { v.push_back(b); }
+}
+
+//////////////////////////////////////
+// i/o helpers
+/////////////////
 
 static uint8_t peek_byte() {
     int32_t raw = pros::c::serial_peek_byte(PORT);
@@ -133,20 +163,6 @@ static std::vector<uint8_t> read() {
     return payload;
 }
 
-/**
- * @brief serialize an instance of a trivially-copyable datatype, and add it to
- * a vector
- *
- * @tparam T the datatype
- * @param v the vector to add to
- * @param data the data to serialize
- */
-template <typename T> static void vector_append(std::vector<uint8_t>& v, const T& data) {
-    static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
-    const auto raw = std::bit_cast<std::array<const uint8_t, sizeof(T)>>(data);
-    for (uint8_t b : raw) { v.push_back(b); }
-}
-
 static void write(const std::vector<uint8_t>& message) {
     // stuff the message
     std::vector<uint8_t> payload;
@@ -179,7 +195,11 @@ static void write(const std::vector<uint8_t>& message) {
     }
 }
 
-std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout){
+//////////////////////////////////////
+// global functions
+/////////////////
+
+std::vector<uint8_t> write_and_receive(uint8_t id, const std::vector<uint8_t>& data, int timeout) {
     // prepare data
     std::vector<uint8_t> out;
     out.push_back(id);
