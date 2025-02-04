@@ -1,40 +1,31 @@
 #include "copro/OTOS.hpp"
-#include "copro/Coprocessor.hpp"
+#include "Coprocessor.hpp"
 #include "pros/error.h"
 #include <cmath>
 
-// getCoprocessorVersion,         // 0 // low prio
-// otos::getStatus,               // 1 // done
-// otos::getVersion,              // 2 // low prio
-// otos::resetTracking,           // 3 // done
-// otos::getPosVelAccel,          // 4 // low prio
-// otos::getPosVelAccelStdDev,    // 5 // low prio
-// otos::getPosVelAccelAndStdDev, // 6 // low prio
-// otos::getPose,                 // 7  // done
-// otos::setPose,                 // 8  // done
-// otos::getPositionStdDev,       // 9  // low prio
-// otos::getVelocity,             // 10 // low prio
-// otos::getVelocityStdDev,       // 11 // low prio
-// otos::getAcceleration,         // 12 // low prio
-// otos::getAccelerationStdDev,   // 13 // low prio
-// otos::getLinearUnit,           // 14 // unnecessary
-// otos::setLinearUnit,           // 15 // unnecessary
-// otos::getAngularUnit,          // 16 // unnecessary
-// otos::setAngularUnit,          // 17 // unnecessary
-// otos::getLinearScalar,         // 18 // done
-// otos::setLinearScalar,         // 19 // done
-// otos::getAngularScalar,        // 20 // done
-// otos::setAngularScalar,        // 21 // done
-// otos::getSignalProcessConfig,  // 22 // low prio
-// otos::setSignalProcessConfig,  // 23 // low prio
-// otos::selfTest,                // 24 // done
-// otos::calibrate,               // 25 // done
-// otos::isCalibrated,            // 26 // done
-// otos::getOffset,               // 27 // impossible until FW bug fixed
-// otos::setOffset                // 28 // done
+// otos::resetTracking,           - implemented
+// otos::getPosVelAccel,          - not implemented
+// otos::getPosVelAccelStdDev,    - not implemented
+// otos::getPosVelAccelAndStdDev, - not implemented
+// otos::getPose,                 - implemented
+// otos::setPose,                 - implemented
+// otos::getPositionStdDev,       - not implemented
+// otos::getVelocity,             - not implemented
+// otos::getVelocityStdDev,       - not implemented
+// otos::getAcceleration,         - not implemented
+// otos::getAccelerationStdDev,   - not implemented
+// otos::getLinearScalar,         - implemented
+// otos::setLinearScalar,         - implemented
+// otos::getAngularScalar,        - implemented
+// otos::setAngularScalar,        - implemented
+// otos::getSignalProcessConfig,  - not implemented
+// otos::setSignalProcessConfig,  - not implemented
+// otos::calibrate,               - implemented
+// otos::isCalibrated,            - implemented
+// otos::getOffset,               - not implemented
+// otos::setOffset                - implemented
 
-namespace otos {
-
+namespace copro {
 //////////////////////////////////////
 // constants
 /////////////////
@@ -76,9 +67,10 @@ template <typename T, int N> static T deserialize(const std::vector<uint8_t>& da
 // OTOS
 /////////////////
 
-Status getStatus() noexcept {
-    constexpr int ID = 1;
+OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor)
+    : m_coprocessor(coprocessor) {}
 
+Status OTOS::get_status() {
     union {
             struct {
                     uint8_t warn_tilt_angle : 1;
@@ -91,7 +83,7 @@ Status getStatus() noexcept {
             uint8_t value;
     } s;
 
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+    auto raw = m_coprocessor->write_and_receive("otos/get_status", {}, READ_TIMEOUT);
     if (raw.empty()) {
         return {0, 0, 0, 0, 1};
     } else {
@@ -101,9 +93,8 @@ Status getStatus() noexcept {
     }
 }
 
-int selfTest() noexcept {
-    constexpr int ID = 24;
-    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+int OTOS::self_test() {
+    const auto raw = m_coprocessor->write_and_receive("otos/self_test", {}, READ_TIMEOUT);
     if (raw.empty()) {
         return PROS_ERR;
     } else {
@@ -111,9 +102,8 @@ int selfTest() noexcept {
     }
 }
 
-int resetTracking() noexcept {
-    constexpr int ID = 3;
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+int OTOS::reset_tracking() {
+    auto raw = m_coprocessor->write_and_receive("otos/reset_tracking", {}, READ_TIMEOUT);
     if (raw.empty()) {
         return PROS_ERR;
     } else {
@@ -125,21 +115,20 @@ int resetTracking() noexcept {
 // pose
 /////////////////
 
-Pose get_pose() noexcept {
-    constexpr int ID = 7;
+Pose OTOS::get_pose() {
     constexpr Pose ERROR = {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
                             std::numeric_limits<float>::infinity()};
 
     // request, receive
-    auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (tmp.empty()) { return ERROR; }
+    auto tmp = m_coprocessor->write_and_receive("otos/get_pose", {}, READ_TIMEOUT);
+    if (tmp.empty()) return ERROR;
 
     // error checking
     bool err = true;
     for (uint8_t b : tmp) {
-        if (b != 1) { err = false; }
+        if (b != 1) err = false;
     }
-    if (err) { return ERROR; }
+    if (err) return ERROR;
 
     // parse raw data
     int16_t rawX = (tmp[1] << 8) | tmp[0];
@@ -149,8 +138,7 @@ Pose get_pose() noexcept {
     return {rawX * INT16_TO_INCH, rawY * INT16_TO_INCH, rawH * INT16_TO_DEG};
 }
 
-int set_pose(Pose pose) noexcept {
-    constexpr int ID = 8;
+int OTOS::set_pose(Pose pose) {
     // cast
     int16_t rawX = (pose.x * INCH_TO_INT16);
     int16_t rawY = (pose.y * INCH_TO_INT16);
@@ -165,20 +153,16 @@ int set_pose(Pose pose) noexcept {
     out[4] = rawH & 0xFF;
     out[5] = (rawH >> 8) & 0xFF;
     // write and get response
-    auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
-    if (raw.empty()) {
-        return PROS_ERR;
-    } else {
-        return static_cast<int>(raw.at(0));
-    }
+    auto raw = m_coprocessor->write_and_receive("otos/set_pose", out, READ_TIMEOUT);
+    if (raw.empty()) return PROS_ERR;
+    else return static_cast<int>(raw.at(0));
 }
 
 //////////////////////////////////////
 // offset
 /////////////////
 
-int set_offset(Pose pose) noexcept {
-    constexpr int ID = 28;
+int OTOS::set_offset(Pose pose) {
     // cast
     int16_t rawX = (pose.x * INCH_TO_INT16);
     int16_t rawY = (pose.y * INCH_TO_INT16);
@@ -193,80 +177,59 @@ int set_offset(Pose pose) noexcept {
     out[4] = rawH & 0xFF;
     out[5] = (rawH >> 8) & 0xFF;
     // write and get response
-    auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
-    if (raw.empty()) {
-        return PROS_ERR;
-    } else {
-        return static_cast<int>(raw.at(0));
-    }
+    auto raw = m_coprocessor->write_and_receive("otos/set_offset", out, READ_TIMEOUT);
+    if (raw.empty()) return PROS_ERR;
+    else return static_cast<int>(raw.at(0));
 }
 
 //////////////////////////////////////
 // linear scalar
 /////////////////
 
-float get_linear_scalar() noexcept {
-    constexpr int ID = 18;
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.empty()) {
-        return std::numeric_limits<float>::infinity();
-    } else {
-        return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
-    }
+float OTOS::get_linear_scalar() {
+    auto raw = m_coprocessor->write_and_receive("otos/get_linear_scalar", {}, READ_TIMEOUT);
+    if (raw.empty()) return std::numeric_limits<float>::infinity();
+    else return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
 }
 
-int set_linear_scalar(float scalar) noexcept {
-    constexpr int ID = 19;
+int OTOS::set_linear_scalar(float scalar) {
     auto raw = static_cast<uint8_t>((scalar - 1.0f) * 1000 + 0.5f);
-    auto err = copro::write_and_receive(ID, {raw}, READ_TIMEOUT);
-    if (err.empty()) {
-        return PROS_ERR;
-    } else {
-        return 0;
-    }
+    auto err = m_coprocessor->write_and_receive("otos/set_linear_scalar", {raw}, READ_TIMEOUT);
+    if (err.empty()) return PROS_ERR;
+    else return 0;
 }
 
 //////////////////////////////////////
 // angular scalar
 /////////////////
 
-float get_angular_scalar() noexcept {
-    constexpr int ID = 20;
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.empty()) {
-        return std::numeric_limits<float>::infinity();
-    } else {
-        return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
-    }
+float OTOS::get_angular_scalar() {
+    auto raw = m_coprocessor->write_and_receive("otos/get_angular_scalar", {}, READ_TIMEOUT);
+    if (raw.empty()) return std::numeric_limits<float>::infinity();
+    else return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
 }
 
-int set_angular_scalar(float scalar) noexcept {
-    constexpr int ID = 21;
+int OTOS::set_angular_scalar(float scalar) {
     auto raw = static_cast<uint8_t>((scalar - 1.0f) * 1000 + 0.5f);
-    auto err = copro::write_and_receive(ID, {raw}, READ_TIMEOUT);
-    if (err.empty()) {
-        return PROS_ERR;
-    } else {
-        return 0;
-    }
+    auto err = m_coprocessor->write_and_receive("otos/set_angular_scalar", {raw}, READ_TIMEOUT);
+    if (err.empty()) return PROS_ERR;
+    else return 0;
 }
 
 //////////////////////////////////////
 // calibrate
 /////////////////
 
-int calibrate(uint8_t samples) noexcept {
-    constexpr int ID = 25;
-    auto err = copro::write_and_receive(ID, {samples}, READ_TIMEOUT);
-    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) { return PROS_ERR; }
+int OTOS::calibrate(uint8_t samples) {
+    auto err = m_coprocessor->write_and_receive("otos/calibrate", {samples}, READ_TIMEOUT);
+    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) return PROS_ERR;
     return err.at(0);
 }
 
-int isCalibrated() noexcept {
-    constexpr int ID = 26;
-    auto err = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) { return PROS_ERR; }
+int OTOS::is_calibrated() {
+    auto err = m_coprocessor->write_and_receive("otos/is_calibrated", {}, READ_TIMEOUT);
+    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) return PROS_ERR;
     return err.at(0);
 }
 
-} // namespace otos
+} // namespace copro

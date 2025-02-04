@@ -188,13 +188,19 @@ static void write(const std::vector<uint8_t>& message, int port) {
 }
 
 //////////////////////////////////////
-// global functions
+// member functions
 /////////////////
+
+Coprocessor::Coprocessor(int port, int baud_rate)
+    : m_port(port),
+      m_baud_rate(baud_rate) {}
 
 std::vector<uint8_t> Coprocessor::write_and_receive(const std::string& topic, const std::vector<uint8_t>& data,
                                                     int timeout) {
     // prepare data
     std::vector<uint8_t> out;
+    int id = find_id(topic);
+    if (id == -1) return {};
     out.push_back(id);
     out.insert(out.end(), data.begin(), data.end());
     // write data
@@ -237,7 +243,7 @@ int Coprocessor::initialize(int timeout) {
         }
         pros::delay(50);
         // set serial port baud rate
-        if (pros::c::serial_set_baudrate(m_port, baud_rate) == PROS_ERR) {
+        if (pros::c::serial_set_baudrate(m_port, m_baud_rate) == PROS_ERR) {
             code = errno;
             return;
         }
@@ -285,5 +291,31 @@ int Coprocessor::initialize(int timeout) {
         // delay to save resources
         pros::delay(10);
     }
+}
+
+int Coprocessor::find_id(const std::string& topic) {
+    // if the topic is already registered, return it's index
+    for (int i = 0; i < m_topics.size(); i++) {
+        if (m_topics.at(i) == topic) return i;
+    }
+    // check that there's space for a new topic
+    if (m_topics.size() >= std::numeric_limits<uint8_t>::max()) {
+        errno = EOVERFLOW;
+        return PROS_ERR;
+    }
+    // assemble message
+    std::vector<uint8_t> out;
+    out.push_back(m_topics.size());
+    for (uint8_t c : topic) out.push_back(c);
+    auto err = write_and_receive("register", out, 5);
+    // check for errors
+    if (err.empty()) return {};
+    if (err.at(0) != 0) {
+        errno = err.at(0);
+        return PROS_ERR;
+    }
+    // add the topic to the vector
+    m_topics.push_back(topic);
+    return m_topics.size() - 1;
 }
 } // namespace copro

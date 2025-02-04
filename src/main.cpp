@@ -4,15 +4,21 @@
 #include "pros/llemu.hpp"
 #include <cstring>
 
-// status is 4 when driver control
 void initialize() {
     pros::lcd::initialize();
-    // pros::lcd::print(0, "initializing: %d", copro::init(13, 921600));
-    pros::lcd::print(1, "errno: %d", errno);
-    pros::delay(10);
+    // create and initialize coprocessor
+    auto co = std::make_shared<copro::Coprocessor>(13, 921600);
+    co->initialize();
+
+    // create and calibrate OTOS
+    copro::OTOS otos(co);
+    otos.calibrate();
+    while (!otos.is_calibrated()) pros::delay(10);
+
+    // print the position measured by the otos
     while (true) {
-        auto a = otos::get_pose();
-        std::cout << "x: " << a.x << ", y: " << a.y << ", h: " << a.h << std::endl;
+        auto pose = otos.get_pose();
+        std::cout << "x: " << pose.x << ", y: " << pose.y << ", h: " << pose.h << std::endl;
         pros::delay(10);
     }
 }
