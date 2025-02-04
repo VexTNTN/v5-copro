@@ -367,6 +367,7 @@ template <> std::string get_error_name(Coprocessor::ErrorType err) {
         case (UNKNOWN_FAILURE): return "UNKNOWN_FAILURE";
         case (UNKNOWN_FAILURE_COPROCESSOR): return "UNKNOWN_FAILURE_COPROCESSOR";
         case (TOO_MANY_TOPICS): return "TOO_MANY_TOPICS";
+        default: return "UNKNOWN_FAILURE";
     }
 }
 } // namespace copro
