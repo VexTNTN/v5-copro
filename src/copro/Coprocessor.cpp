@@ -1,14 +1,13 @@
 #include "copro/Coprocessor.hpp"
-#include "pros/error.h"
-#include "pros/rtos.hpp"
 #include "pros/serial.h"
-#include <cerrno>
+#include "pros/error.h"
 #include <limits>
 #include <mutex>
-#include <system_error>
-#include <type_traits>
+#include <expected>
 
 namespace copro {
+
+using Error = Coprocessor::Error;
 
 //////////////////////////////////////
 // constants
@@ -66,7 +65,6 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
  * @param data the data to serialize
  */
 template <typename T> static void vector_append(std::vector<uint8_t>& v, const T& data) {
-    static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
     const auto raw = std::bit_cast<std::array<const uint8_t, sizeof(T)>>(data);
     for (uint8_t b : raw) { v.push_back(b); }
 }
@@ -75,16 +73,13 @@ template <typename T> static void vector_append(std::vector<uint8_t>& v, const T
 // i/o helpers
 /////////////////
 
-static uint8_t peek_byte(int port) {
+static std::expected<uint8_t, Error> peek_byte(int port) {
     int32_t raw = pros::c::serial_peek_byte(port);
     // Handle timeout scenario with single retry
     if (raw == -1) {
         pros::delay(1);
         raw = pros::c::serial_peek_byte(port);
-        if (raw == -1) {
-            pros::c::serial_flush(port);
-            throw std::system_error(ENOLINK, std::generic_category(), "timed out");
-        }
+        if (raw == -1) return {2, 3};
     }
     // Handle PROS error
     if (raw == PROS_ERR) { throw std::system_error(errno, std::generic_category(), "pros serial error"); }
@@ -108,7 +103,6 @@ static uint8_t read_byte(int port) {
 }
 
 template <typename T> static T read_stream(int port) {
-    static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
     std::array<uint8_t, sizeof(T)> raw;
     for (uint8_t& b : raw) b = read_byte(port);
     return std::bit_cast<T>(raw);

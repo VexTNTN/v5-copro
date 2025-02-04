@@ -1,7 +1,9 @@
 #pragma once
 
+#include "copro/Error.hpp"
 #include "pros/rtos.hpp"
 #include <cstdint>
+#include <expected>
 #include <vector>
 
 namespace copro {
@@ -12,25 +14,21 @@ namespace copro {
  */
 class Coprocessor {
     public:
-        Coprocessor(int port, int baud_rate);
+        enum class ErrorType {
 
+        };
+    public:
+        Coprocessor(int port, int baud_rate);
         /**
-         * @brief initialize comms with the coprocessor.
+         * @brief
          *
-         * This function will block until the coprocessor responds to a ping.
-         *
-         * This function may set errno to one of the following values upon failure:
-         *
-         *
-         * @param timeout max time that can be taken to initialize, in milliseconds. integer max by default
-         *
-         * @return 0 on success
-         * @return INT32_MAX on failure, setting errno
+         * @return std::unexpected<Error<ErrorType>>
          */
-        int initialize();
-        std::vector<uint8_t> write_and_receive(const std::string& topic, const std::vector<uint8_t>& data, int timeout);
+        std::unexpected<Error<ErrorType>> initialize();
+        std::expected<std::vector<uint8_t>, Error<ErrorType>>
+        write_and_receive(const std::string& topic, const std::vector<uint8_t>& data, int timeout);
     private:
-        int find_id(const std::string& topic);
+        std::expected<int, Error<ErrorType>> find_id(const std::string& topic);
 
         const int m_port;
         const int m_baud_rate;
