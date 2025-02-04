@@ -4,10 +4,23 @@
 #include <limits>
 #include <mutex>
 #include <expected>
+#include <format>
 
 namespace copro {
 
-using Error = Coprocessor::Error;
+//////////////////////////////////////
+// using
+/////////////////
+
+using ErrorType = Coprocessor::ErrorType;
+using _Error = Error<ErrorType>;
+using enum ErrorType;
+
+//////////////////////////////////////
+// macros
+/////////////////
+
+#define ERROR(...) std::unexpected<_Error>(_Error(__VA_ARGS__))
 
 //////////////////////////////////////
 // constants
@@ -20,6 +33,39 @@ constexpr uint8_t ESCAPE = 0xBB;
 //////////////////////////////////////
 // util functions
 /////////////////
+
+static std::expected<int, _Error> enable_serial(int port) {
+    if (pros::c::serial_enable(port) == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on port {}", port);
+    }
+    // vexos needs some time to enable serial mode on the port
+    pros::delay(15);
+    return 0;
+}
+
+static std::expected<int, _Error> set_baud_rate(int port, int baud_rate) {
+    if (pros::c::serial_set_baudrate(port, baud_rate) == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on port {}", port);
+    }
+    // vexos needs some time to set the baud rate
+    pros::delay(15);
+    return 0;
+}
+
+static std::expected<int, _Error> flush(int port) {
+    if (pros::c::serial_flush(port) == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on port {}", port);
+    }
+    // vexos needs some time to flush the serial port
+    pros::delay(15);
+    return 0;
+}
 
 /**
  * @brief calculate a CRC16 using CCITT-FALSE
@@ -73,46 +119,59 @@ template <typename T> static void vector_append(std::vector<uint8_t>& v, const T
 // i/o helpers
 /////////////////
 
-static std::expected<uint8_t, Error> peek_byte(int port) {
+static std::expected<uint8_t, _Error> peek_byte(int port) {
     int32_t raw = pros::c::serial_peek_byte(port);
     // Handle timeout scenario with single retry
     if (raw == -1) {
         pros::delay(1);
         raw = pros::c::serial_peek_byte(port);
-        if (raw == -1) return {2, 3};
+        if (raw == -1) return ERROR(READ_TIMEOUT, "transmission stopped abruptly");
     }
     // Handle PROS error
-    if (raw == PROS_ERR) { throw std::system_error(errno, std::generic_category(), "pros serial error"); }
+    if (raw == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
+    }
+    // return peeked byte
     return static_cast<uint8_t>(raw);
 }
 
-static uint8_t read_byte(int port) {
+static std::expected<uint8_t, _Error> read_byte(int port) {
     int32_t raw = pros::c::serial_read_byte(port);
     // Handle timeout scenario with single retry
     if (raw == -1) {
         pros::delay(1);
         raw = pros::c::serial_read_byte(port);
-        if (raw == -1) {
-            pros::c::serial_flush(port);
-            throw std::system_error(ENOLINK, std::generic_category(), "timed out");
-        }
+        if (raw == -1) return ERROR(READ_TIMEOUT, "transmission stopped abruptly");
     }
     // Handle PROS error
-    if (raw == PROS_ERR) { throw std::system_error(errno, std::generic_category(), "pros serial error"); }
+    if (raw == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
+    }
     return static_cast<uint8_t>(raw);
 }
 
-template <typename T> static T read_stream(int port) {
+template <typename T> static std::expected<T, _Error> read_stream(int port) {
     std::array<uint8_t, sizeof(T)> raw;
-    for (uint8_t& b : raw) b = read_byte(port);
+    for (uint8_t& b : raw) {
+        if (auto c = read_byte(port)) b = c.value();
+        else return std::unexpected(_Error(c.error(), "failed to read from serial stream"));
+    }
     return std::bit_cast<T>(raw);
 }
 
-static std::vector<uint8_t> read(int port) {
+static std::expected<std::vector<uint8_t>, _Error> read(int port) {
     // check if there's data available
     const int avail = pros::c::serial_get_read_avail(port);
-    if (avail == 0) { throw std::system_error(ENODATA, std::generic_category(), "no data available"); }
-    if (avail == PROS_ERR) { throw std::system_error(errno, std::generic_category(), "pros serial error, first"); }
+    if (avail == 0) return ERROR(NO_MESSAGE, "no message available");
+    if (avail == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
+    }
 
     // find the next delimiter
     while (true) {
@@ -123,45 +182,50 @@ static std::vector<uint8_t> read(int port) {
     }
 
     // read the header
-    auto length = read_stream<uint16_t>(port);
-    auto crc = read_stream<uint16_t>(port);
+    const auto length = read_stream<uint16_t>(port);
+    if (!length) return std::unexpected(_Error(length.error(), "failed to read length"));
+    const auto crc = read_stream<uint16_t>(port);
+    if (!crc) return std::unexpected(_Error(crc.error(), "failed to read CRC"));
 
     // read the payload
     std::vector<uint8_t> payload;
-    for (int i = 0; i < length; ++i) {
-        const uint8_t b = peek_byte(port);
-        if (b == DELIMITER_1 || b == DELIMITER_2) { // if the next byte is DELIMITER_1 or DELIMITER_2,
-                                                    // bail
-            throw std::system_error(EPROTO, std::generic_category(), "unescaped delimiter found");
+    for (int i = 0; i < *length; ++i) {
+        const auto b = peek_byte(port);
+        if (!b) return std::unexpected(_Error(b.error(), "failed to read payload"));
+        if (*b == DELIMITER_1 || *b == DELIMITER_2) { // if the next byte is DELIMITER_1 or DELIMITER_2,
+            // bail
+            return ERROR(MESSAGE_CORRUPTED, "message corrupted, found delimiter early");
         } else { // otherwise, pop it from the serial buffer
-            read_byte(port);
+            const auto b = read_byte(port);
+            if (!b.has_value()) return std::unexpected(_Error(b.error(), "failed to read payload"));
         }
         if (b == ESCAPE) { // if an escape is found, read the next byte
-            ++i;
-            payload.push_back(read_byte(port));
+            i++;
+            if (const auto b = read_byte(port)) payload.push_back(*b);
+            else return std::unexpected(_Error(b.error(), "failed to read payload"));
         } else {
-            payload.push_back(b);
+            payload.push_back(*b);
         }
     }
 
     // validate payload with CRC
-    if (crc != crc16(payload)) { throw std::system_error(EBADMSG, std::generic_category(), "CRC check failed"); }
+    if (crc != crc16(payload)) return ERROR(MESSAGE_CORRUPTED, "message corrupted, CRC failed");
 
     // return payload
     return payload;
 }
 
-static void write(const std::vector<uint8_t>& message, int port) {
+static std::expected<int, _Error> write(const std::vector<uint8_t>& message, int port) {
     // stuff the message
     std::vector<uint8_t> payload;
     for (uint8_t b : message) {
-        if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) { payload.push_back(ESCAPE); }
+        if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) payload.push_back(ESCAPE);
         payload.push_back(b);
     }
 
     // check payload size
     if (payload.size() > std::numeric_limits<uint16_t>::max()) {
-        throw std::system_error(EOVERFLOW, std::generic_category(), "payload size too big");
+        return ERROR(MESSAGE_TOO_BIG, "message too big after stuffing, with size {}", payload.size());
     }
 
     // create the header
@@ -175,10 +239,19 @@ static void write(const std::vector<uint8_t>& message, int port) {
     vector_append(header, crc16(message));
 
     // write
-    if (pros::c::serial_write(port, header.data(), header.size()) == PROS_ERR)
-        throw std::system_error(errno, std::generic_category(), "pros serial error");
-    if (pros::c::serial_write(port, payload.data(), payload.size()) == PROS_ERR)
-        throw std::system_error(errno, std::generic_category(), "pros serial error");
+    if (pros::c::serial_write(port, header.data(), header.size()) == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        if (errno == EIO) return ERROR(IO_FAILURE, "system IO failure on port {}", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
+    }
+    if (pros::c::serial_write(port, payload.data(), payload.size()) == PROS_ERR) {
+        if (errno == EINVAL) return ERROR(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return ERROR(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        if (errno == EIO) return ERROR(IO_FAILURE, "system IO failure on port {}", port);
+        return ERROR(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
+    }
+    return 0;
 }
 
 //////////////////////////////////////
@@ -189,91 +262,77 @@ Coprocessor::Coprocessor(int port, int baud_rate)
     : m_port(port),
       m_baud_rate(baud_rate) {}
 
-std::vector<uint8_t> Coprocessor::write_and_receive(const std::string& topic, const std::vector<uint8_t>& data,
-                                                    int timeout) {
-    constexpr std::vector<uint8_t> FAIL = {};
+std::expected<std::vector<uint8_t>, _Error>
+Coprocessor::write_and_receive(const std::string& topic, const std::vector<uint8_t>& data, int timeout) {
     // if not initialized, bail
-    if (!m_initialized) {
-        errno = ENOSTR;
-        return FAIL;
-    }
+    if (!m_initialized) return ERROR(NOT_INITIALIZED, "port {} not initialized as a generic serial device", m_port);
     // mutex
     std::lock_guard lock(m_mutex);
     // prepare data
     std::vector<uint8_t> out;
-    int id = find_id(topic);
-    if (id == -1) return FAIL;
-    out.push_back(id);
+    auto id = find_id(topic);
+    if (!id) return std::unexpected(id.error());
+    out.push_back(*id);
     out.insert(out.end(), data.begin(), data.end());
     // write data
-    write(out, m_port);
+    {
+        auto err = write(out, m_port);
+        if (!err) return std::unexpected(err.error());
+    }
     // wait for a response
     const int start = pros::millis();
     while (true) {
-        try {
-            auto raw = read(m_port);
+        auto raw = read(m_port);
+        if (raw) {
             std::vector<uint8_t> rtn;
-            rtn.insert(rtn.end(), raw.begin() + 1, raw.end());
+            rtn.insert(rtn.end(), raw->begin() + 1, raw->end());
             return rtn;
-        } catch (std::system_error& e) {
-            if (e.code().value() == ENODATA) {
-                if (pros::millis() - start > timeout) {
-                    errno = e.code().value();
-                    return FAIL;
-                } else {
-                    continue;
-                }
-            } else {
-                errno = e.code().value();
-                return FAIL;
-            }
         }
+        // handle the error
+        if (raw.error().type == READ_TIMEOUT && pros::millis() - start > timeout) return std::unexpected(raw.error());
+        else if (raw.error().type != READ_TIMEOUT) return std::unexpected(raw.error());
     }
 }
 
-int Coprocessor::initialize() {
-    constexpr int FAIL = std::numeric_limits<int>::max();
-    // check if already initialized
-    if (m_initialized) {
-        errno = EEXIST;
-        return FAIL;
+std::expected<int, _Error> Coprocessor::initialize() {
+    if (m_initialized) { // check if already initialized
+        return ERROR(ALREADY_INITIALIZED, "port {} has already been initialized as a generic serial device", m_port);
     }
-    // enable serial port
-    if (pros::c::serial_enable(m_port) == PROS_ERR) return FAIL;
-    pros::delay(15);
-    // set serial port baud rate
-    if (pros::c::serial_set_baudrate(m_port, m_baud_rate) == PROS_ERR) return FAIL;
-    pros::delay(15);
-    // flush serial buffer
-    if (pros::c::serial_flush(m_port) == PROS_ERR) return FAIL;
-    pros::delay(15);
-    // wait for the pi to boot
+    { // enable serial port
+        auto err = enable_serial(m_port);
+        if (!err) return ERROR(err.error(), "failed to enable serial port");
+    }
+    { // set baud rate
+        auto err = set_baud_rate(m_port, m_baud_rate);
+        if (!err) return ERROR(err.error(), "failed to set baud rate");
+    }
+    { // flush serial buffer
+        auto err = flush(m_port);
+        if (!err) return ERROR(err.error(), "failed to flush serial port");
+    }
+    // wait for the coprocessor to boot
     while (true) {
         auto err = write_and_receive("ping", {}, 10);
-        if (!err.empty()) {
+        if (err) {
             m_initialized = true;
             return 0;
-        };
-        if (errno != ENODATA) return FAIL;
+        } else if (err.error().type != READ_TIMEOUT) {
+            return std::unexpected(_Error(err.error(), "failed parsing ping response"));
+        }
         pros::delay(10);
     }
 }
 
-int Coprocessor::find_id(const std::string& topic) {
-    constexpr int FAIL = std::numeric_limits<int>::max();
+std::expected<uint8_t, _Error> Coprocessor::find_id(const std::string& topic) {
     // if not initialized, bail
-    if (!m_initialized) {
-        errno = ENOSTR;
-        return FAIL;
-    }
+    if (!m_initialized) return ERROR(NOT_INITIALIZED, "port {} not initialized as a generic serial device", m_port);
     // if the topic is already registered, return its index
     for (int i = 0; i < m_topics.size(); i++) {
         if (m_topics.at(i) == topic) return i;
     }
     // check that there's space for a new topic
     if (m_topics.size() >= std::numeric_limits<uint8_t>::max()) {
-        errno = EOVERFLOW;
-        return FAIL;
+        return ERROR(TOO_MANY_TOPICS, "too many topics registered on coprocessor on port {}", m_port);
     }
     // assemble message
     std::vector<uint8_t> out;
@@ -281,10 +340,9 @@ int Coprocessor::find_id(const std::string& topic) {
     for (uint8_t c : topic) out.push_back(c);
     auto err = write_and_receive("register", out, 5);
     // check for errors
-    if (err.empty()) return FAIL;
-    if (err.at(0) != 0) {
-        errno = err.at(0);
-        return FAIL;
+    if (!err) return std::unexpected(_Error(err.error(), "failed to register topic"));
+    if (err->at(0) != 0) {
+        return ERROR(UNKNOWN_FAILURE_COPROCESSOR, "unknown failure from coprocessor on port {}", m_port);
     }
     // add the topic to the vector
     m_topics.push_back(topic);

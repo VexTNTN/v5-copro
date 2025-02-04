@@ -15,7 +15,18 @@ namespace copro {
 class Coprocessor {
     public:
         enum class ErrorType {
-
+            READ_TIMEOUT,
+            INVALID_PORT,
+            PORT_UNAVAILABLE,
+            NO_MESSAGE,
+            MESSAGE_CORRUPTED,
+            MESSAGE_TOO_BIG,
+            IO_FAILURE,
+            NOT_INITIALIZED,
+            ALREADY_INITIALIZED,
+            UNKNOWN_FAILURE,
+            UNKNOWN_FAILURE_COPROCESSOR,
+            TOO_MANY_TOPICS,
         };
     public:
         Coprocessor(int port, int baud_rate);
@@ -24,11 +35,11 @@ class Coprocessor {
          *
          * @return std::unexpected<Error<ErrorType>>
          */
-        std::unexpected<Error<ErrorType>> initialize();
+        std::expected<int, Error<ErrorType>> initialize();
         std::expected<std::vector<uint8_t>, Error<ErrorType>>
         write_and_receive(const std::string& topic, const std::vector<uint8_t>& data, int timeout);
     private:
-        std::expected<int, Error<ErrorType>> find_id(const std::string& topic);
+        std::expected<uint8_t, Error<ErrorType>> find_id(const std::string& topic);
 
         const int m_port;
         const int m_baud_rate;
