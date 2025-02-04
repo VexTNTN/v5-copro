@@ -1,10 +1,10 @@
 #include "copro/Coprocessor.hpp"
 #include "pros/error.h"
-#include "pros/misc.hpp"
 #include "pros/rtos.hpp"
 #include "pros/serial.h"
 #include <cerrno>
 #include <limits>
+#include <mutex>
 #include <system_error>
 #include <type_traits>
 
@@ -197,10 +197,18 @@ Coprocessor::Coprocessor(int port, int baud_rate)
 
 std::vector<uint8_t> Coprocessor::write_and_receive(const std::string& topic, const std::vector<uint8_t>& data,
                                                     int timeout) {
+    constexpr std::vector<uint8_t> FAIL = {};
+    // if not initialized, bail
+    if (!m_initialized) {
+        errno = ENOSTR;
+        return FAIL;
+    }
+    // mutex
+    std::lock_guard lock(m_mutex);
     // prepare data
     std::vector<uint8_t> out;
     int id = find_id(topic);
-    if (id == -1) return {};
+    if (id == -1) return FAIL;
     out.push_back(id);
     out.insert(out.end(), data.begin(), data.end());
     // write data
@@ -217,91 +225,61 @@ std::vector<uint8_t> Coprocessor::write_and_receive(const std::string& topic, co
             if (e.code().value() == ENODATA) {
                 if (pros::millis() - start > timeout) {
                     errno = e.code().value();
-                    return {};
+                    return FAIL;
                 } else {
                     continue;
                 }
             } else {
                 errno = e.code().value();
-                return {};
+                return FAIL;
             }
         }
     }
 }
 
-int Coprocessor::initialize(int timeout) {
-    const int start = pros::millis();
-    bool success = false;
-    int code = 0;
-    // run the actual initialization stuff in a task
-    // this way we can kill it immediately when needed
-    pros::Task t([&]() {
-        // enable serial port
-        if (pros::c::serial_enable(m_port) == PROS_ERR) {
-            code = errno;
-            return;
-        }
-        pros::delay(50);
-        // set serial port baud rate
-        if (pros::c::serial_set_baudrate(m_port, m_baud_rate) == PROS_ERR) {
-            code = errno;
-            return;
-        }
-        // flush serial buffer
-        pros::delay(50);
-        if (pros::c::serial_flush(m_port) == PROS_ERR) {
-            code = errno;
-            return;
-        }
-        pros::delay(10);
-        // wait for the pi to boot
-        while (true) {
-            auto err = write_and_receive("ping", {}, 10);
-            if (!err.empty()) {
-                success = true;
-                return;
-            } else if (errno != ENODATA) {
-                code = errno;
-                return;
-            }
-        }
-    });
-
-    // continuously check whether the conditions for initialization are met
+int Coprocessor::initialize() {
+    constexpr int FAIL = std::numeric_limits<int>::max();
+    // check if already initialized
+    if (m_initialized) {
+        errno = EEXIST;
+        return FAIL;
+    }
+    // enable serial port
+    if (pros::c::serial_enable(m_port) == PROS_ERR) return FAIL;
+    pros::delay(15);
+    // set serial port baud rate
+    if (pros::c::serial_set_baudrate(m_port, m_baud_rate) == PROS_ERR) return FAIL;
+    pros::delay(15);
+    // flush serial buffer
+    if (pros::c::serial_flush(m_port) == PROS_ERR) return FAIL;
+    pros::delay(15);
+    // wait for the pi to boot
     while (true) {
-        // if initialization is successful, exit
-        if (success) { return 0; }
-        // if there was an error, exit
-        if (code != 0) {
-            errno = code;
-            return PROS_ERR;
-        }
-        // if it's driver control, kill task and exit
-        if (pros::competition::get_status() == 4 || pros::competition::get_status() == 0) {
-            t.remove();
-            errno = EINTR;
-            return PROS_ERR;
-        }
-        // if the timeout has been reached, kill task and exit
-        if (pros::millis() - start > timeout && timeout != -1) {
-            t.remove();
-            errno = ETIMEDOUT;
-            return PROS_ERR;
-        }
-        // delay to save resources
+        auto err = write_and_receive("ping", {}, 10);
+        if (!err.empty()) {
+            m_initialized = true;
+            return 0;
+        };
+        if (errno != ENODATA) return FAIL;
         pros::delay(10);
     }
 }
 
 int Coprocessor::find_id(const std::string& topic) {
-    // if the topic is already registered, return it's index
+    constexpr int FAIL = std::numeric_limits<int>::max();
+    // if not initialized, bail
+    if (!m_initialized) {
+        errno = ENOSTR;
+        return FAIL;
+    }
+    // if the topic is already registered, return its index
     for (int i = 0; i < m_topics.size(); i++) {
         if (m_topics.at(i) == topic) return i;
     }
     // check that there's space for a new topic
     if (m_topics.size() >= std::numeric_limits<uint8_t>::max()) {
         errno = EOVERFLOW;
-        return PROS_ERR;
+        return FAIL;
     }
     // assemble message
     std::vector<uint8_t> out;
@@ -309,10 +287,10 @@ int Coprocessor::find_id(const std::string& topic) {
     for (uint8_t c : topic) out.push_back(c);
     auto err = write_and_receive("register", out, 5);
     // check for errors
-    if (err.empty()) return {};
+    if (err.empty()) return FAIL;
     if (err.at(0) != 0) {
         errno = err.at(0);
-        return PROS_ERR;
+        return FAIL;
     }
     // add the topic to the vector
     m_topics.push_back(topic);
