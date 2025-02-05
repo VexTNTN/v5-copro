@@ -3,8 +3,6 @@
 #include <cmath>
 #include <limits>
 
-//
-
 namespace copro {
 
 //////////////////////////////////////
@@ -32,14 +30,33 @@ constexpr Version PROTOCOL_VERSION {
 };
 constexpr int READ_TIMEOUT = 5;
 
+namespace topic {
+constexpr std::string_view INITIALIZE = "otos/initialize";
+constexpr std::string_view IS_CONNECTED = "otos/is_connected";
+constexpr std::string_view GET_HARDWARE_VERSION = "otos/get_hardware_version";
+constexpr std::string_view GET_FIRMWARE_VERSION = "otos/get_firmware_version";
+constexpr std::string_view SELF_TEST = "otos/self_test";
+constexpr std::string_view CALIBRATE_IMU = "otos/calibrate_imu";
+constexpr std::string_view IS_IMU_CALIBRATED = "otos/is_imu_calibrated";
+constexpr std::string_view GET_LINEAR_SCALAR = "otos/get_linear_scalar";
+constexpr std::string_view SET_LINEAR_SCALAR = "otos/set_linear_scalar";
+constexpr std::string_view GET_ANGULAR_SCALAR = "otos/get_angular_scalar";
+constexpr std::string_view SET_ANGULAR_SCALAR = "otos/set_angular_scalar";
+constexpr std::string_view GET_STATUS = "otos/get_status";
+constexpr std::string_view GET_OFFSET = "otos/get_offset";
+constexpr std::string_view SET_OFFSET = "otos/set_offset";
+constexpr std::string_view GET_POSE = "otos/get_pose";
+constexpr std::string_view SET_POSE = "otos/set_pose";
+constexpr std::string_view GET_VELOCITY = "otos/get_velocity";
+constexpr std::string_view GET_ACCELERATION = "otos/get_acceleration";
+} // namespace topic
+
 constexpr float RADIAN_TO_DEGREE = 180.0 / 3.14159;
 constexpr float METER_TO_INCH = 39.3701;
-
 constexpr float METER_TO_INT16 = 32768.0 / 10.0;
 constexpr float INT16_TO_METER = 1.0 / METER_TO_INT16;
 constexpr float INT16_TO_INCH = INT16_TO_METER * METER_TO_INCH;
 constexpr float INCH_TO_INT16 = 1.0 / INT16_TO_INCH;
-
 constexpr float RAD_TO_INT16 = 32768.0 / 3.14159;
 constexpr float INT16_TO_RAD = 1.0 / RAD_TO_INT16;
 constexpr float INT16_TO_DEG = INT16_TO_RAD * RADIAN_TO_DEGREE;
