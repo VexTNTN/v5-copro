@@ -348,26 +348,4 @@ std::expected<uint8_t, _Error> Coprocessor::find_id(const std::string& topic) {
     m_topics.push_back(topic);
     return m_topics.size() - 1;
 }
-
-//////////////////////////////////////
-// template specializations
-/////////////////
-
-template <> std::string get_error_name(Coprocessor::ErrorType err) {
-    switch (err) {
-        case (READ_TIMEOUT): return "READ_TIMEOUT";
-        case (INVALID_PORT): return "INVALID_PORT";
-        case (PORT_UNAVAILABLE): return "PORT_UNAVAILABLE";
-        case (NO_MESSAGE): return "NO_MESSAGE";
-        case (MESSAGE_CORRUPTED): return "MESSAGE_CORRUPTED";
-        case (MESSAGE_TOO_BIG): return "MESSAGE_TOO_BIG";
-        case (IO_FAILURE): return "IO_FAILURE";
-        case (NOT_INITIALIZED): return "NOT_INITIALIZED";
-        case (ALREADY_INITIALIZED): return "ALREADY_INITIALIZED";
-        case (UNKNOWN_FAILURE): return "UNKNOWN_FAILURE";
-        case (UNKNOWN_FAILURE_COPROCESSOR): return "UNKNOWN_FAILURE_COPROCESSOR";
-        case (TOO_MANY_TOPICS): return "TOO_MANY_TOPICS";
-        default: return "UNKNOWN_FAILURE";
-    }
-}
 } // namespace copro
