@@ -206,7 +206,8 @@ std::expected<bool, Error<ErrorType>> OTOS::self_test() {
     // check that the OTOS has been initialized
     CHECK_INITIALIZE();
     // send self test register
-    auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_WRITE, {}, READ_TIMEOUT);
+    res.start = 1;
+    auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_WRITE, {res.value}, READ_TIMEOUT);
     // check for IO errors
     CHECK_WRITE(raw, 2);
     // check respose
@@ -220,7 +221,7 @@ std::expected<bool, Error<ErrorType>> OTOS::self_test() {
     for (int i = 0; i < 10; i++) {
         pros::delay(5); // short delay between reads
         res.start = 1;
-        auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_READ, {res.start}, READ_TIMEOUT);
+        auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_READ, {}, READ_TIMEOUT);
         // check IO errors
         CHECK_WRITE(raw, 1);
         res.value = raw->at(0);
