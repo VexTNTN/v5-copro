@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <source_location>
+#include <type_traits>
 #include <vector>
 
 namespace copro {
@@ -34,7 +35,15 @@ class Error {
             : type(type),
               what({std::format(fmt, std::forward<Args>(args)...)}) {}
 
-        template <typename... Args> Error(const Error& other, std::format_string<Args...> fmt, Args&&... args)
+        template <typename... Args> Error(const Error<T>& other, std::format_string<Args...> fmt, Args&&... args)
+            : type(type) {
+            for (auto s : other.what) what.push_back(s);
+            what.push_back(std::format(fmt, std::forward<Args>(args)...));
+        }
+
+        template <typename R, typename... Args>
+            requires(!std::is_same_v<R, T>)
+        Error(const Error<R> other, T type, std::format_string<Args...> fmt, Args&&... args)
             : type(type) {
             for (auto s : other.what) what.push_back(s);
             what.push_back(std::format(fmt, std::forward<Args>(args)...));
