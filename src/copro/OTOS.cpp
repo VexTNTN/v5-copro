@@ -92,7 +92,7 @@ OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor, const std::string& d
       m_device(device) {}
 
 std::expected<void, _Error> OTOS::initialize() {
-    // check if the OTOS has already been initialized
+    // check that the OTOS has been initialized
     if (m_initialized) {
         return ERROR(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
                      m_coprocessor->get_port());
@@ -126,6 +126,29 @@ std::expected<void, _Error> OTOS::initialize() {
     }
     // no errors
     return {};
+}
+
+std::expected<Version, _Error> OTOS::get_firmware_version() {
+    // check that the OTOS has been initialized
+    if (m_initialized) {
+        return ERROR(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
+                     m_coprocessor->get_port());
+    }
+    // send data
+    auto raw = m_coprocessor->write_and_receive(topic::INITIALIZE, {}, READ_TIMEOUT);
+    // check for errors
+    if (!raw) {
+        return std::unexpected(_Error(raw.error(), RS485_IO, "failed to send command to OTOS with id {} on port {}",
+                                      m_device, m_coprocessor->get_port()));
+    }
+    if (raw->size() != 2) {
+        return ERROR(INCORRECT_RESPONSE_SIZE, "incorrect response size from OTOS with id {} on port {}", m_device,
+                     m_coprocessor->get_port());
+    }
+    if (raw->at(0) == std::numeric_limits<uint8_t>::max()) {
+        return ERROR(I2C_IO, "failed to interact with OTOS with id {} on port {}", m_device, m_coprocessor->get_port());
+    }
+    return Version {.major = raw->at(0), .minor = raw->at(1)};
 }
 
 std::expected<Status, _Error> OTOS::get_status() {
