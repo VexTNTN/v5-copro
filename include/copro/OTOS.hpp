@@ -14,9 +14,12 @@ struct Pose {
 class OTOS {
     public:
         enum class ErrorType {
-            BRAIN_COPROCESSOR_IO,
-            COPROCESSOR_OTOS_IO,
+            ALREADY_INITIALIZED,
+            RS485_IO,
+            I2C_IO,
             INCORRECT_RESPONSE_SIZE,
+            NO_DEVICE,
+            UNKNOWN,
         };
 
         struct Version {
@@ -146,7 +149,7 @@ class OTOS {
          *
          * @param scalar angular scalar, must be a value between 0.872 and 1.127
          *
-         * @return void on success
+         * @std::expected<void, Error<ErrorType>> initialize()return void on success
          * @return Error<ErrorType> on failure
          */
         std::expected<void, Error<ErrorType>> set_angular_scalar(float scalar);
@@ -206,5 +209,6 @@ class OTOS {
     private:
         mutable std::shared_ptr<copro::Coprocessor> m_coprocessor;
         const std::string m_device;
+        bool m_initialized = false;
 };
 } // namespace copro

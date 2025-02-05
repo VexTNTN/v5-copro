@@ -31,24 +31,24 @@ constexpr Version PROTOCOL_VERSION {
 constexpr int READ_TIMEOUT = 5;
 
 namespace topic {
-constexpr std::string_view INITIALIZE = "otos/initialize";
-constexpr std::string_view IS_CONNECTED = "otos/is_connected";
-constexpr std::string_view GET_HARDWARE_VERSION = "otos/get_hardware_version";
-constexpr std::string_view GET_FIRMWARE_VERSION = "otos/get_firmware_version";
-constexpr std::string_view SELF_TEST = "otos/self_test";
-constexpr std::string_view CALIBRATE_IMU = "otos/calibrate_imu";
-constexpr std::string_view IS_IMU_CALIBRATED = "otos/is_imu_calibrated";
-constexpr std::string_view GET_LINEAR_SCALAR = "otos/get_linear_scalar";
-constexpr std::string_view SET_LINEAR_SCALAR = "otos/set_linear_scalar";
-constexpr std::string_view GET_ANGULAR_SCALAR = "otos/get_angular_scalar";
-constexpr std::string_view SET_ANGULAR_SCALAR = "otos/set_angular_scalar";
-constexpr std::string_view GET_STATUS = "otos/get_status";
-constexpr std::string_view GET_OFFSET = "otos/get_offset";
-constexpr std::string_view SET_OFFSET = "otos/set_offset";
-constexpr std::string_view GET_POSE = "otos/get_pose";
-constexpr std::string_view SET_POSE = "otos/set_pose";
-constexpr std::string_view GET_VELOCITY = "otos/get_velocity";
-constexpr std::string_view GET_ACCELERATION = "otos/get_acceleration";
+constexpr const char* INITIALIZE = "otos/initialize";
+constexpr const char* IS_CONNECTED = "otos/is_connected";
+constexpr const char* GET_HARDWARE_VERSION = "otos/get_hardware_version";
+constexpr const char* GET_FIRMWARE_VERSION = "otos/get_firmware_version";
+constexpr const char* SELF_TEST = "otos/self_test";
+constexpr const char* CALIBRATE_IMU = "otos/calibrate_imu";
+constexpr const char* IS_IMU_CALIBRATED = "otos/is_imu_calibrated";
+constexpr const char* GET_LINEAR_SCALAR = "otos/get_linear_scalar";
+constexpr const char* SET_LINEAR_SCALAR = "otos/set_linear_scalar";
+constexpr const char* GET_ANGULAR_SCALAR = "otos/get_angular_scalar";
+constexpr const char* SET_ANGULAR_SCALAR = "otos/set_angular_scalar";
+constexpr const char* GET_STATUS = "otos/get_status";
+constexpr const char* GET_OFFSET = "otos/get_offset";
+constexpr const char* SET_OFFSET = "otos/set_offset";
+constexpr const char* GET_POSE = "otos/get_pose";
+constexpr const char* SET_POSE = "otos/set_pose";
+constexpr const char* GET_VELOCITY = "otos/get_velocity";
+constexpr const char* GET_ACCELERATION = "otos/get_acceleration";
 } // namespace topic
 
 constexpr float RADIAN_TO_DEGREE = 180.0 / 3.14159;
@@ -91,6 +91,43 @@ OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor, const std::string& d
     : m_coprocessor(coprocessor),
       m_device(device) {}
 
+std::expected<void, Error<ErrorType>> OTOS::initialize() {
+    // check if the OTOS has already been initialized
+    if (m_initialized) {
+        return ERROR(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
+                     m_coprocessor->get_port());
+    }
+    // prepare data
+    std::vector<uint8_t> out;
+    for (auto c : m_device) out.push_back(c);
+    // send data
+    auto raw = m_coprocessor->write_and_receive(topic::INITIALIZE, out, READ_TIMEOUT);
+    // check for errors
+    if (!raw) {
+        return std::unexpected(_Error(raw.error(), RS485_IO, "failed to send command to OTOS with id {} on port {}",
+                                      m_device, m_coprocessor->get_port()));
+    }
+    if (raw->size() != 1) {
+        return ERROR(INCORRECT_RESPONSE_SIZE, "incorrect response size from OTOS with id {} on port {}", m_device,
+                     m_coprocessor->get_port());
+    }
+    if (raw->at(0) == 1) {
+        // the OTOS was initialized before this program was ran, probably
+        // not a big deal, so we eat the "error"
+        m_initialized = true;
+        return {};
+    }
+    if (raw->at(0) == 2) {
+        return ERROR(I2C_IO, "failed to interact with OTOS with id {} on port {}", m_device, m_coprocessor->get_port());
+    }
+    if (raw->at(0) != 0) {
+        return ERROR(UNKNOWN, "unknown error response when trying to interact with OTOS with id {} on port {}",
+                     m_device, m_coprocessor->get_port());
+    }
+    // no errors
+    return {};
+}
+
 std::expected<Status, _Error> OTOS::get_status() {
     // the info we receive uses bit fields
     union {
@@ -106,13 +143,16 @@ std::expected<Status, _Error> OTOS::get_status() {
     } s;
 
     // get raw data from OTOS, and check for errors
-    auto raw = m_coprocessor->write_and_receive("otos/get_status", {}, READ_TIMEOUT);
-    if (!raw) return ERROR(raw.error(), BRAIN_COPROCESSOR_IO, "failed to interact to coprocessor");
+    auto raw = m_coprocessor->write_and_receive(topic::GET_STATUS, {}, READ_TIMEOUT);
+    if (!raw) {
+        return std::unexpected(_Error(raw.error(), RS485_IO, "failed to send command to OTOS with id {} on port {}",
+                                      m_device, m_coprocessor->get_port()));
+    }
     if (raw->size() != 2) return ERROR(INCORRECT_RESPONSE_SIZE, "response from coprocessor too short");
     // parse raw data
     s.value = raw->at(0);
     if (s.value == std::numeric_limits<uint8_t>::max()) {
-        return ERROR(COPROCESSOR_OTOS_IO, "failed to interact with OTOS");
+        return ERROR(I2C_IO, "failed to interact with OTOS with id {} on port {}", m_device, m_coprocessor->get_port());
     }
     // return data
     return Status {

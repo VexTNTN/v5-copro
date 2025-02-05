@@ -323,6 +323,8 @@ std::expected<int, _Error> Coprocessor::initialize() {
     }
 }
 
+int Coprocessor::get_port() { return m_port; }
+
 std::expected<uint8_t, _Error> Coprocessor::find_id(const std::string& topic) {
     // if not initialized, bail
     if (!m_initialized) return ERROR(NOT_INITIALIZED, "port {} not initialized as a generic serial device", m_port);

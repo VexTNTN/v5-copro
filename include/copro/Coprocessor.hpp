@@ -38,6 +38,7 @@ class Coprocessor {
         std::expected<int, Error<ErrorType>> initialize();
         std::expected<std::vector<uint8_t>, Error<ErrorType>>
         write_and_receive(const std::string& topic, const std::vector<uint8_t>& data, int timeout);
+        int get_port();
     private:
         std::expected<uint8_t, Error<ErrorType>> find_id(const std::string& topic);
 
