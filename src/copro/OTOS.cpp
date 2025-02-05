@@ -32,7 +32,6 @@ constexpr int READ_TIMEOUT = 5;
 
 namespace topic {
 constexpr const char* INITIALIZE = "otos/initialize";
-constexpr const char* IS_CONNECTED = "otos/is_connected";
 constexpr const char* GET_HARDWARE_VERSION = "otos/get_hardware_version";
 constexpr const char* GET_FIRMWARE_VERSION = "otos/get_firmware_version";
 constexpr const char* SELF_TEST = "otos/self_test";
@@ -128,6 +127,29 @@ std::expected<void, _Error> OTOS::initialize() {
     return {};
 }
 
+std::expected<Version, _Error> OTOS::get_hardware_version() {
+    // check that the OTOS has been initialized
+    if (m_initialized) {
+        return ERROR(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
+                     m_coprocessor->get_port());
+    }
+    // send data
+    auto raw = m_coprocessor->write_and_receive(topic::GET_HARDWARE_VERSION, {}, READ_TIMEOUT);
+    // check for errors
+    if (!raw) {
+        return std::unexpected(_Error(raw.error(), RS485_IO, "failed to send command to OTOS with id {} on port {}",
+                                      m_device, m_coprocessor->get_port()));
+    }
+    if (raw->size() != 2) {
+        return ERROR(INCORRECT_RESPONSE_SIZE, "incorrect response size from OTOS with id {} on port {}", m_device,
+                     m_coprocessor->get_port());
+    }
+    if (raw->at(0) == std::numeric_limits<uint8_t>::max()) {
+        return ERROR(I2C_IO, "failed to interact with OTOS with id {} on port {}", m_device, m_coprocessor->get_port());
+    }
+    return Version {.major = raw->at(0), .minor = raw->at(1)};
+}
+
 std::expected<Version, _Error> OTOS::get_firmware_version() {
     // check that the OTOS has been initialized
     if (m_initialized) {
@@ -135,7 +157,7 @@ std::expected<Version, _Error> OTOS::get_firmware_version() {
                      m_coprocessor->get_port());
     }
     // send data
-    auto raw = m_coprocessor->write_and_receive(topic::INITIALIZE, {}, READ_TIMEOUT);
+    auto raw = m_coprocessor->write_and_receive(topic::GET_FIRMWARE_VERSION, {}, READ_TIMEOUT);
     // check for errors
     if (!raw) {
         return std::unexpected(_Error(raw.error(), RS485_IO, "failed to send command to OTOS with id {} on port {}",
