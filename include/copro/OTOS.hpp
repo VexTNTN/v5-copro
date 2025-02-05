@@ -15,6 +15,7 @@ class OTOS {
     public:
         enum class ErrorType {
             ALREADY_INITIALIZED,
+            NOT_INITIALIZED,
             RS485_IO,
             I2C_IO,
             INCORRECT_RESPONSE_SIZE,
@@ -68,13 +69,6 @@ class OTOS {
          * @return Error<ErrorType> on failure
          */
         std::expected<void, Error<ErrorType>> initialize();
-        /**
-         * @brief Check whether the OTOS is connected
-         *
-         * @return void on success
-         * @return ErrorType<Error> on failure
-         */
-        std::expected<void, Error<ErrorType>> is_connected();
         /**
          * @brief Get the hardware version of the OTOS
          *

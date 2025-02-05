@@ -91,7 +91,7 @@ OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor, const std::string& d
     : m_coprocessor(coprocessor),
       m_device(device) {}
 
-std::expected<void, Error<ErrorType>> OTOS::initialize() {
+std::expected<void, _Error> OTOS::initialize() {
     // check if the OTOS has already been initialized
     if (m_initialized) {
         return ERROR(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
