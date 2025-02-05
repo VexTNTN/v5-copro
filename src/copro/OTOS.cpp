@@ -9,9 +9,8 @@ namespace copro {
 // using
 /////////////////
 
-using ErrorType = OTOS::ErrorType;
-using _Error = Error<ErrorType>;
-using enum ErrorType;
+using Err = Error<OTOS::ErrorType>;
+using enum OTOS::ErrorType;
 using Status = OTOS::Status;
 using Version = OTOS::Version;
 
@@ -19,39 +18,32 @@ using Version = OTOS::Version;
 // macros
 /////////////////
 
-// macro to simplify returning an ERROR
-#define ERROR(...) std::unexpected<_Error>(_Error(__VA_ARGS__))
-
 // macro to simplify checking write_and_receive
 #define CHECK_WRITE(response, num)                                                                                     \
     if (!response) {                                                                                                   \
-        return std::unexpected(_Error(response.error(), RS485_IO,                                                      \
-                                      "failed to send command to OTOS with id {} on port {}", m_device,                \
-                                      m_coprocessor->get_port()));                                                     \
+        return Err::add(response, RS485_IO, "failed to send command to OTOS with id {} on port {}", m_device,          \
+                        m_coprocessor->get_port());                                                                    \
     }                                                                                                                  \
     if (response->size() != num) {                                                                                     \
-        return std::unexpected<_Error>(_Error(INCORRECT_RESPONSE_SIZE,                                                 \
-                                              "expected response size of {} from OTOS with id {} on port {}", num,     \
-                                              m_device, m_coprocessor->get_port()));                                   \
+        return Err::make(INCORRECT_RESPONSE_SIZE, "expected response size of {} from OTOS with id {} on port {}", num, \
+                         m_device, m_coprocessor->get_port());                                                         \
     }
 
 // macro to simplify checking whether the OTOS has been initialized
 #define CHECK_INITIALIZE()                                                                                             \
     if (!m_initialized) {                                                                                              \
-        return std::unexpected<_Error>(_Error(NOT_INITIALIZED, "OTOS with id {} on port {} has not been initialized",  \
-                                              m_device, m_coprocessor->get_port()));                                   \
+        return Err::make(NOT_INITIALIZED, "OTOS with id {} on port {} has not been initialized", m_device,             \
+                         m_coprocessor->get_port());                                                                   \
     }
 
 // macro to simplify returning an I2C_IO error
 #define I2CERR                                                                                                         \
-    std::unexpected<_Error>(                                                                                           \
-        _Error(I2C_IO, "failed to interact with OTOS with id {} on port {}", m_device, m_coprocessor->get_port()));
+    Err::make(I2C_IO, "failed to interact with OTOS with id {} on port {}", m_device, m_coprocessor->get_port());
 
 // macro to simplify returning an unknown error
 #define UNKNOWNERR                                                                                                     \
-    std::unexpected<_Error>(_Error(UNKNOWN,                                                                            \
-                                   "unknown error response when trying to interact with OTOS with id {} on port {}",   \
-                                   m_device, m_coprocessor->get_port()));
+    Err::make(UNKNOWN, "unknown error response when trying to interact with OTOS with id {} on port {}", m_device,     \
+              m_coprocessor->get_port());
 
 //////////////////////////////////////
 // constants
@@ -123,11 +115,11 @@ OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor, const std::string& d
     : m_coprocessor(coprocessor),
       m_device(device) {}
 
-std::expected<void, _Error> OTOS::initialize() {
+std::expected<void, Err> OTOS::initialize() {
     // check that the OTOS has been initialized
     if (m_initialized) {
-        return ERROR(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
-                     m_coprocessor->get_port());
+        return Err::make(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
+                         m_coprocessor->get_port());
     }
     // prepare data
     std::vector<uint8_t> out;
@@ -152,7 +144,7 @@ std::expected<void, _Error> OTOS::initialize() {
     }
 }
 
-std::expected<Version, _Error> OTOS::get_hardware_version() {
+std::expected<Version, Err> OTOS::get_hardware_version() {
     // check that the OTOS has been initialized
     CHECK_INITIALIZE();
     // send data
@@ -166,7 +158,7 @@ std::expected<Version, _Error> OTOS::get_hardware_version() {
     }
 }
 
-std::expected<Version, _Error> OTOS::get_firmware_version() {
+std::expected<Version, Err> OTOS::get_firmware_version() {
     // check that the OTOS has been initialized
     CHECK_INITIALIZE();
     // send data
@@ -180,7 +172,7 @@ std::expected<Version, _Error> OTOS::get_firmware_version() {
     }
 }
 
-std::expected<bool, Error<ErrorType>> OTOS::self_test() {
+std::expected<bool, Err> OTOS::self_test() {
     union {
             struct {
                     /// @brief Write 1 to start the self test
@@ -234,7 +226,7 @@ std::expected<bool, Error<ErrorType>> OTOS::self_test() {
     return static_cast<bool>(res.pass == 1);
 }
 
-std::expected<Status, _Error> OTOS::get_status() {
+std::expected<Status, Err> OTOS::get_status() {
     // check that the OTOS has been initialized
     CHECK_INITIALIZE();
 

@@ -3,38 +3,61 @@
 #include <format>
 #include <vector>
 #include <ostream>
+#include <expected>
 
 namespace copro {
 
-/**
- * @brief Generic Error class
- *
- * @tparam T the error enum to use
- */
 template <typename T>
     requires std::is_scoped_enum_v<T>
 class Error {
     public:
-        template <typename... Args> Error(T type, std::format_string<Args...> fmt, Args&&... args)
-            : type(type),
-              what({std::format(fmt, std::forward<Args>(args)...)}) {}
-
-        template <typename... Args> Error(const Error<T>& other, std::format_string<Args...> fmt, Args&&... args)
-            : type(type) {
-            for (auto s : other.what) what.push_back(s);
-            what.push_back(std::format(fmt, std::forward<Args>(args)...));
+        /**
+         * @brief create a new error
+         *
+         * @tparam Args std::format args types
+         *
+         * @param type the type of error
+         * @param fmt formatter string
+         * @param args formatter arguments
+         *
+         * @return std::unexpected<Error>
+         */
+        template <typename... Args>
+        static constexpr std::unexpected<Error<T>> make(T type, std::format_string<Args...> fmt, Args&&... args) {
+            return std::unexpected<Error<T>>(Error<T>(type, {std::format(fmt, std::forward<Args>(args)...)}));
         }
 
-        template <typename R, typename... Args>
-            requires(!std::is_same_v<R, T>)
-        Error(const Error<R> other, T type, std::format_string<Args...> fmt, Args&&... args)
-            : type(type) {
-            for (auto s : other.what) what.push_back(s);
-            what.push_back(std::format(fmt, std::forward<Args>(args)...));
+        template <typename R, typename... Args> static constexpr std::unexpected<Error<T>>
+        add(const std::expected<R, Error<T>>& other, std::format_string<Args...> fmt, Args&&... args) {
+            auto tmp = other.error();
+            tmp.what.push_back(std::format(fmt, std::forward<Args>(args)...));
+            return std::unexpected<Error<T>>(tmp);
+        }
+
+        template <typename R, typename S, typename... Args>
+            requires(!std::is_same_v<T, R>)
+        static constexpr std::unexpected<Error<T>> add(const std::expected<R, Error<S>>& other, T type,
+                                                       std::format_string<Args...> fmt, Args&&... args) {
+            std::vector<std::string> tmp = other.error().what;
+            tmp.push_back(std::format(fmt, std::forward<Args>(args)...));
+            return std::unexpected<Error<T>>(Error<T>(type, std::move(tmp)));
+        }
+
+        template <typename R, typename S, typename... Args>
+            requires(!std::is_same_v<T, R>)
+        static constexpr std::unexpected<Error<T>> add(std::expected<R, Error<S>>&& other, T type,
+                                                       std::format_string<Args...> fmt, Args&&... args) {
+            std::vector<std::string> tmp = other.error().what;
+            tmp.push_back(std::format(fmt, std::forward<Args>(args)...));
+            return std::unexpected<Error<T>>(Error<T>(type, std::move(tmp)));
         }
 
         const T type;
         std::vector<std::string> what;
+    private:
+        Error(T type, std::vector<std::string>&& s)
+            : type(type),
+              what({s}) {}
 };
 
 template <typename T> std::ostream& operator<<(std::ostream& os, const Error<T>& e) {

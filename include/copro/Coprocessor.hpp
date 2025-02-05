@@ -8,6 +8,10 @@
 
 namespace copro {
 
+// protocol:
+// it's all COBS'd
+// [8-bit ID] [CRC16] [payload] [0x0]
+
 /**
  * @brief Coprocessor class. Simplifies interactions with a coprocessor over a smart port
  *
