@@ -22,28 +22,28 @@ class Error {
          *
          * @return std::unexpected<Error>
          */
-        template <typename... Args>
-        static constexpr std::unexpected<Error<T>> make(T type, std::format_string<Args...> fmt, Args&&... args) {
+        template <typename... Args> static constexpr std::unexpected<Error<T>>
+        make(T type, std::format_string<Args...> fmt, Args&&... args) noexcept {
             return std::unexpected<Error<T>>(Error<T>(type, {std::format(fmt, std::forward<Args>(args)...)}));
         }
 
         template <typename R, typename... Args> static constexpr std::unexpected<Error<T>>
-        add(const std::expected<R, Error<T>>& other, std::format_string<Args...> fmt, Args&&... args) {
+        add(const std::expected<R, Error<T>>& other, std::format_string<Args...> fmt, Args&&... args) noexcept {
             auto tmp = other.error();
             tmp.what.push_back(std::format(fmt, std::forward<Args>(args)...));
             return std::unexpected<Error<T>>(tmp);
         }
 
         template <typename R, typename... Args> static constexpr std::unexpected<Error<T>>
-        add(std::expected<R, Error<T>>&& other, std::format_string<Args...> fmt, Args&&... args) {
+        add(std::expected<R, Error<T>>&& other, std::format_string<Args...> fmt, Args&&... args) noexcept {
             other.what.push_back(std::format(fmt, std::forward<Args>(args)...));
             return std::unexpected<Error<T>>(std::move(other));
         }
 
         template <typename R, typename S, typename... Args>
             requires(!std::is_same_v<T, R>)
-        static constexpr std::unexpected<Error<T>> add(const std::expected<R, Error<S>>& other, T type,
-                                                       std::format_string<Args...> fmt, Args&&... args) {
+        static constexpr std::unexpected<Error<T>> add(T type, const std::expected<R, Error<S>>& other,
+                                                       std::format_string<Args...> fmt, Args&&... args) noexcept {
             std::vector<std::string> tmp = other.error().what;
             tmp.push_back(std::format(fmt, std::forward<Args>(args)...));
             return std::unexpected<Error<T>>(Error<T>(type, std::move(tmp)));
@@ -51,8 +51,8 @@ class Error {
 
         template <typename R, typename S, typename... Args>
             requires(!std::is_same_v<T, R>)
-        static constexpr std::unexpected<Error<T>> add(std::expected<R, Error<S>>&& other, T type,
-                                                       std::format_string<Args...> fmt, Args&&... args) {
+        static constexpr std::unexpected<Error<T>> add(T type, std::expected<R, Error<S>>&& other,
+                                                       std::format_string<Args...> fmt, Args&&... args) noexcept {
             other.what.push_back(std::format(fmt, std::forward<Args>(args)...));
             return std::unexpected<Error<T>>(Error<T>(type, std::move(other)));
         }
@@ -60,7 +60,7 @@ class Error {
         const T type;
         std::vector<std::string> what;
     private:
-        Error(T type, std::vector<std::string>&& s)
+        Error(T type, std::vector<std::string>&& s) noexcept
             : type(type),
               what({s}) {}
 };
