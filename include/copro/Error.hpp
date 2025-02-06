@@ -66,7 +66,10 @@ class Error {
 };
 
 template <typename T> std::ostream& operator<<(std::ostream& os, const Error<T>& e) {
-    for (auto it = e.what.rbegin(); it != e.what.rend(); it++) os << "  " << *it << std::endl;
+    for (int i = e.what.size() - 1; i >= 0; i--) {
+        for (int j = 0; j < e.what.size() - 1 - i; j++) os << "  ";
+        os << e.what.at(i) << std::endl;
+    }
     return os;
 }
 
