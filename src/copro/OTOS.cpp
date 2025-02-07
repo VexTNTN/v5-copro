@@ -21,7 +21,7 @@ using Version = OTOS::Version;
 // macro to simplify checking write_and_receive
 #define CHECK_WRITE(response, num)                                                                                     \
     if (!response) {                                                                                                   \
-        return Err::add(response, RS485_IO, "failed to send command to OTOS with id {} on port {}", m_device,          \
+        return Err::add(RS485_IO, response, "failed to send command to OTOS with id {} on port {}", m_device,          \
                         m_coprocessor->get_port());                                                                    \
     }                                                                                                                  \
     if (response->size() != num) {                                                                                     \
