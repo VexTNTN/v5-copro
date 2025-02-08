@@ -27,39 +27,6 @@ constexpr uint8_t ESCAPE = 0xBB;
 // util functions
 /////////////////
 
-static std::expected<int, Err> enable_serial(int port) {
-    if (pros::c::serial_enable(port) == PROS_ERR) {
-        if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
-        if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
-        return Err::make(UNKNOWN_FAILURE, "unknown failure on port {}", port);
-    }
-    // vexos needs some time to enable serial mode on the port
-    pros::delay(15);
-    return 0;
-}
-
-static std::expected<int, Err> set_baud_rate(int port, int baud_rate) {
-    if (pros::c::serial_set_baudrate(port, baud_rate) == PROS_ERR) {
-        if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
-        if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
-        return Err::make(UNKNOWN_FAILURE, "unknown failure on port {}", port);
-    }
-    // vexos needs some time to set the baud rate
-    pros::delay(15);
-    return 0;
-}
-
-static std::expected<int, Err> flush(int port) {
-    if (pros::c::serial_flush(port) == PROS_ERR) {
-        if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
-        if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
-        return Err::make(UNKNOWN_FAILURE, "unknown failure on port {}", port);
-    }
-    // vexos needs some time to flush the serial port
-    pros::delay(15);
-    return 0;
-}
-
 /**
  * @brief calculate a CRC16 using CCITT-FALSE
  *
@@ -111,6 +78,39 @@ template <typename T> static void vector_append(std::vector<uint8_t>& v, const T
 //////////////////////////////////////
 // i/o helpers
 /////////////////
+
+static std::expected<int, Err> enable_serial(int port) {
+    if (pros::c::serial_enable(port) == PROS_ERR) {
+        if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return Err::make(UNKNOWN_FAILURE, "unknown failure on port {}", port);
+    }
+    // vexos needs some time to enable serial mode on the port
+    pros::delay(15);
+    return 0;
+}
+
+static std::expected<int, Err> set_baud_rate(int port, int baud_rate) {
+    if (pros::c::serial_set_baudrate(port, baud_rate) == PROS_ERR) {
+        if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return Err::make(UNKNOWN_FAILURE, "unknown failure on port {}", port);
+    }
+    // vexos needs some time to set the baud rate
+    pros::delay(15);
+    return 0;
+}
+
+static std::expected<int, Err> flush(int port) {
+    if (pros::c::serial_flush(port) == PROS_ERR) {
+        if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
+        if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
+        return Err::make(UNKNOWN_FAILURE, "unknown failure on port {}", port);
+    }
+    // vexos needs some time to flush the serial port
+    pros::delay(15);
+    return 0;
+}
 
 static std::expected<uint8_t, Err> peek_byte(int port) {
     int32_t raw = pros::c::serial_peek_byte(port);
