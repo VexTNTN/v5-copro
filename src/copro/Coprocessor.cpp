@@ -21,7 +21,6 @@ using enum Coprocessor::ErrorType;
 
 constexpr uint8_t ZERO_BYTE = 0x0;
 constexpr uint8_t PTR_BYTE = 0xFF;
-constexpr uint8_t DELIMITER = 0x0;
 
 constexpr uint8_t DELIMITER_1 = 0xAA;
 constexpr uint8_t DELIMITER_2 = 0x55;
@@ -119,19 +118,17 @@ static std::vector<uint8_t> encode(const std::vector<uint8_t>& message) {
 static std::vector<uint8_t> decode(const std::vector<uint8_t>& message) {
     std::vector<uint8_t> out;
     int next_zero = 0;
-    bool ptr_byte = false;
+    bool ptr_byte = true;
     // decode
-    for (int i = 0; i < message.size(); i++) {
+    for (int i = 0; i < message.size() - 1; i++) {
         const uint8_t byte = message.at(i);
-        if (i == next_zero) { // zero byte handling
+        out.push_back(byte);
+        if (i == next_zero) { // handle zero byte
             next_zero += byte;
-            // pointer byte handling
-            const bool ptr_byte_temp = ptr_byte;
-            ptr_byte = byte == PTR_BYTE;
-            if (ptr_byte_temp) continue;
-            else out.push_back(0x0);
-        } else { // just regular data
-            out.push_back(byte);
+            out.at(out.size() - 1) = ZERO_BYTE;
+            // handle pointer byte
+            if (ptr_byte) out.pop_back();
+            ptr_byte = (byte == PTR_BYTE);
         }
     }
     // return decoded data
