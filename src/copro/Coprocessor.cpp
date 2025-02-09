@@ -66,16 +66,23 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
 }
 
 /**
- * @brief serialize an instance of a trivially-copyable datatype, and add it to
- * a vector
+ * @brief append a vector to the another vector
  *
- * @tparam T the datatype
- * @param v the vector to add to
- * @param data the data to serialize
+ * @tparam T the type of vector
+ * @param v the vector to append to
+ * @param data the vector that will be appended
+ * @return std::vector<T> the vector that was appended to
  */
-template <typename T> static void vector_append(std::vector<uint8_t>& v, const T& data) {
-    const auto raw = std::bit_cast<std::array<const uint8_t, sizeof(T)>>(data);
-    for (uint8_t b : raw) { v.push_back(b); }
+template <typename T> static std::vector<T> vector_append(std::vector<T>& v, const std::vector<T>& data) {
+    for (const auto b : data) v.push_back(b);
+    return v;
+}
+
+template <typename T> static std::vector<uint8_t> serialize(T t) {
+    const auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(t);
+    std::vector<uint8_t> out;
+    for (const uint8_t b : raw) out.push_back(b);
+    return out;
 }
 
 /**
@@ -196,7 +203,7 @@ static std::expected<uint8_t, Err> read_byte(int port) {
     if (raw == -1) {
         pros::delay(1);
         raw = pros::c::serial_read_byte(port);
-        if (raw == -1) return Err::make(READ_TIMEOUT, "transmission stopped abruptly");
+        if (raw == -1) return Err::make(READ_TIMEOUT, "transmission stopped abruptly on port {}", port);
     }
     // Handle PROS error
     if (raw == PROS_ERR) {
@@ -226,85 +233,44 @@ static std::expected<std::vector<uint8_t>, Err> read(int port) {
         return Err::make(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
     }
 
-    // find the next delimiter
-    while (true) {
-        // find DELIMITER_1
-        if (read_byte(port) != DELIMITER_1) continue;
-        // if the next byte is DELIMITER_2, we've found the delimiter
-        if (read_byte(port) == DELIMITER_2) break;
-    }
-
     // read the header
-    const auto length = read_stream<uint16_t>(port);
-    if (!length) return Err::add(length, "failed to read length");
     const auto crc = read_stream<uint16_t>(port);
     if (!crc) return Err::add(crc, "failed to read CRC");
 
-    // read the payload
+    // read the encoded data
     std::vector<uint8_t> payload;
-    for (int i = 0; i < *length; ++i) {
-        const auto b = peek_byte(port);
-        if (!b) return Err::add(b, "failed to read payload");
-        if (*b == DELIMITER_1 || *b == DELIMITER_2) { // if the next byte is DELIMITER_1 or DELIMITER_2,
-            // bail
-            return Err::make(MESSAGE_CORRUPTED, "message corrupted, found delimiter early");
-        } else { // otherwise, pop it from the serial buffer
-            const auto b = read_byte(port);
-            if (!b.has_value()) return Err::add(b, "failed to read payload");
-        }
-        if (b == ESCAPE) { // if an escape is found, read the next byte
-            i++;
-            if (const auto b = read_byte(port)) payload.push_back(*b);
-            else return Err::add(b, "failed to read payload");
-        } else {
-            payload.push_back(*b);
-        }
+    while (true) {
+        const auto byte = read_byte(port);
+        if (!byte) return Err::add(byte, "failed to read payload");
+        payload.push_back(*byte);
+        if (*byte == ZERO_BYTE) break;
     }
 
+    // decode the data
+    const auto data = decode(payload);
+
     // validate payload with CRC
-    if (crc != crc16(payload)) return Err::make(MESSAGE_CORRUPTED, "message corrupted, CRC failed");
+    if (crc != crc16(data)) return Err::make(MESSAGE_CORRUPTED, "message corrupted on port {}, CRC failed", port);
 
     // return payload
     return payload;
 }
 
-static std::expected<int, Err> write(const std::vector<uint8_t>& message, int port) {
-    // stuff the message
-    std::vector<uint8_t> payload;
-    for (uint8_t b : message) {
-        if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) payload.push_back(ESCAPE);
-        payload.push_back(b);
-    }
-
-    // check payload size
-    if (payload.size() > std::numeric_limits<uint16_t>::max()) {
-        return Err::make(MESSAGE_TOO_BIG, "message too big after stuffing, with size {}", payload.size());
-    }
-
-    // create the header
-    std::vector<uint8_t> header;
-    // add the delimiter
-    header.push_back(DELIMITER_1);
-    header.push_back(DELIMITER_2);
-    // add the length
-    vector_append(header, static_cast<uint16_t>(payload.size()));
+static std::expected<void, Err> write(const std::vector<uint8_t>& message, int port) {
+    std::vector<uint8_t> out;
     // add the CRC16
-    vector_append(header, crc16(message));
+    vector_append(out, serialize(crc16(message)));
+    // encode the message
+    vector_append(out, encode(message));
 
-    // write
-    if (pros::c::serial_write(port, header.data(), header.size()) == PROS_ERR) {
+    // write encoded message
+    if (pros::c::serial_write(port, out.data(), out.size()) == PROS_ERR) {
         if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
         if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
         if (errno == EIO) return Err::make(IO_FAILURE, "system IO failure on port {}", port);
         return Err::make(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
     }
-    if (pros::c::serial_write(port, payload.data(), payload.size()) == PROS_ERR) {
-        if (errno == EINVAL) return Err::make(INVALID_PORT, "port {} is not valid", port);
-        if (errno == EACCES) return Err::make(PORT_UNAVAILABLE, "port {} is being accessed by another resource", port);
-        if (errno == EIO) return Err::make(IO_FAILURE, "system IO failure on port {}", port);
-        return Err::make(UNKNOWN_FAILURE, "unknown failure on generic serial port {}", port);
-    }
-    return 0;
+    return {};
 }
 
 //////////////////////////////////////
