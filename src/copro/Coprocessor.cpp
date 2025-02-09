@@ -19,6 +19,10 @@ using enum Coprocessor::ErrorType;
 // constants
 /////////////////
 
+constexpr uint8_t ZERO_BYTE = 0x0;
+constexpr uint8_t PTR_BYTE = 0xFF;
+constexpr uint8_t DELIMITER = 0x0;
+
 constexpr uint8_t DELIMITER_1 = 0xAA;
 constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
@@ -73,6 +77,65 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
 template <typename T> static void vector_append(std::vector<uint8_t>& v, const T& data) {
     const auto raw = std::bit_cast<std::array<const uint8_t, sizeof(T)>>(data);
     for (uint8_t b : raw) { v.push_back(b); }
+}
+
+/**
+ * @brief use COBS to encode data
+ *
+ * @param data the data to encode
+ * @return std::vector<uint8_t> the encoded data
+ */
+static std::vector<uint8_t> encode(const std::vector<uint8_t>& message) {
+    std::vector<uint8_t> out({0});
+    int last_zero = 0;
+    std::vector<uint8_t> data = message;
+    data.push_back(ZERO_BYTE); // add delimiter
+    // encode
+    for (int i = 0; i < data.size(); i++) {
+        // if the last zero byte is 255 bytes away, insert a pointer byte
+        if (out.size() - 1 - last_zero == 255) {
+            out.at(last_zero) = PTR_BYTE;
+            out.push_back(ZERO_BYTE);
+            last_zero = out.size() - 1;
+        }
+        // add the next byte to the output vector
+        const uint8_t byte = data.at(i);
+        out.push_back(byte);
+        // if the current byte is a zero byte, update the last zero and save index
+        if (byte == ZERO_BYTE) {
+            out.at(last_zero) = out.size() - 1 - last_zero;
+            last_zero = out.size() - 1;
+        }
+    }
+    return out;
+}
+
+/**
+ * @brief decode COBS-encoded data
+ *
+ * @param data the data to decode
+ * @return std::vector<uint8_t> the decoded data
+ */
+static std::vector<uint8_t> decode(const std::vector<uint8_t>& message) {
+    std::vector<uint8_t> out;
+    int next_zero = 0;
+    bool ptr_byte = false;
+    // decode
+    for (int i = 0; i < message.size(); i++) {
+        const uint8_t byte = message.at(i);
+        if (i == next_zero) { // zero byte handling
+            next_zero += byte;
+            // pointer byte handling
+            const bool ptr_byte_temp = ptr_byte;
+            ptr_byte = byte == PTR_BYTE;
+            if (ptr_byte_temp) continue;
+            else out.push_back(0x0);
+        } else { // just regular data
+            out.push_back(byte);
+        }
+    }
+    // return decoded data
+    return out;
 }
 
 //////////////////////////////////////
