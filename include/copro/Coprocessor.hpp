@@ -13,8 +13,8 @@ namespace copro {
 // [8-bit ID] [CRC16] [payload] [0x0]
 
 /**
- * @brief Coprocessor class. Simplifies interactions with a coprocessor over a smart port
- *
+ * @brief Coprocessor class. Simplifies interactions with a coprocessor over a
+ * smart port
  */
 class Coprocessor {
     public:
@@ -32,6 +32,7 @@ class Coprocessor {
             UNKNOWN_FAILURE_COPROCESSOR,
             TOO_MANY_TOPICS,
         };
+
     public:
         Coprocessor(int port, int baud_rate);
         /**
@@ -41,15 +42,19 @@ class Coprocessor {
          */
         std::expected<int, Error<ErrorType>> initialize();
         std::expected<std::vector<uint8_t>, Error<ErrorType>>
-        write_and_receive(const std::string& topic, const std::vector<uint8_t>& data, int timeout);
+        write_and_receive(const std::string& topic,
+                          const std::vector<uint8_t>& data,
+                          int timeout);
         int get_port();
+
     private:
-        std::expected<uint8_t, Error<ErrorType>> find_id(const std::string& topic);
+        std::expected<uint8_t, Error<ErrorType>>
+        find_id(const std::string& topic);
 
         const int m_port;
         const int m_baud_rate;
         bool m_initialized = false;
         pros::Mutex m_mutex;
-        std::vector<std::string> m_topics = {"register", "ping", "version"};
+        std::vector<std::string> m_topics = { "register", "ping", "version" };
 };
 } // namespace copro

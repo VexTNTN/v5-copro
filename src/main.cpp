@@ -18,7 +18,8 @@ void initialize() {
     // print the position measured by the otos
     while (true) {
         // auto pose = otos.get_pose();
-        // std::cout << "x: " << pose.x << ", y: " << pose.y << ", h: " << pose.h << std::endl;
+        // std::cout << "x: " << pose.x << ", y: " << pose.y << ", h: " <<
+        // pose.h << std::endl;
         pros::delay(10);
     }
 }

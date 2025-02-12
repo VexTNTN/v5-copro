@@ -19,31 +19,52 @@ using Version = OTOS::Version;
 /////////////////
 
 // macro to simplify checking write_and_receive
-#define CHECK_WRITE(response, num)                                                                                     \
-    if (!response) {                                                                                                   \
-        return Err::add(RS485_IO, response, "failed to send command to OTOS with id {} on port {}", m_device,          \
-                        m_coprocessor->get_port());                                                                    \
-    }                                                                                                                  \
-    if (response->size() != num) {                                                                                     \
-        return Err::make(INCORRECT_RESPONSE_SIZE, "expected response size of {} from OTOS with id {} on port {}", num, \
-                         m_device, m_coprocessor->get_port());                                                         \
+#define CHECK_WRITE(response, num)                                        \
+    if (!response) {                                                      \
+        return Err::add(                                                  \
+          RS485_IO,                                                       \
+          response,                                                       \
+          "failed to send command to OTOS with id {} on port {}",         \
+          m_device,                                                       \
+          m_coprocessor->get_port());                                     \
+    }                                                                     \
+    if (response->size() != num) {                                        \
+        return Err::make(                                                 \
+          INCORRECT_RESPONSE_SIZE,                                        \
+          "expected response size of {} from OTOS with id {} on port {}", \
+          num,                                                            \
+          m_device,                                                       \
+          m_coprocessor->get_port());                                     \
     }
 
 // macro to simplify checking whether the OTOS has been initialized
-#define CHECK_INITIALIZE()                                                                                             \
-    if (!m_initialized) {                                                                                              \
-        return Err::make(NOT_INITIALIZED, "OTOS with id {} on port {} has not been initialized", m_device,             \
-                         m_coprocessor->get_port());                                                                   \
+#define CHECK_INITIALIZE()                                       \
+    if (!m_initialized) {                                        \
+        return Err::make(                                        \
+          NOT_INITIALIZED,                                       \
+          "OTOS with id {} on port {} has not been initialized", \
+          m_device,                                              \
+          m_coprocessor->get_port());                            \
     }
 
 // macro to simplify returning an I2C_IO error
-#define I2CERR                                                                                                         \
-    Err::make(I2C_IO, "failed to interact with OTOS with id {} on port {}", m_device, m_coprocessor->get_port());
+#define I2CERR                                                      \
+    Err::make(I2C_IO,                                               \
+              "failed to interact with OTOS with id {} on port {}", \
+              m_device,                                             \
+              m_coprocessor->get_port());
 
 // macro to simplify returning an unknown error
-#define UNKNOWNERR                                                                                                     \
-    Err::make(UNKNOWN, "unknown error response when trying to interact with OTOS with id {} on port {}", m_device,     \
-              m_coprocessor->get_port());
+#define UNKNOWNERR                                                             \
+    Err::make(                                                                 \
+      UNKNOWN,                                                                 \
+      "unknown error response when trying to interact with OTOS with " "id "   \
+                                                                       "{} "   \
+                                                                       "on "   \
+                                                                       "port " \
+                                                                       "{}",   \
+      m_device,                                                                \
+      m_coprocessor->get_port());
 
 //////////////////////////////////////
 // constants
@@ -90,7 +111,8 @@ constexpr float DEG_TO_INT16 = 1.0 / INT16_TO_DEG;
 // util
 /////////////////
 
-template <typename T> static std::vector<uint8_t> serialize(const T& data)
+template<typename T>
+static std::vector<uint8_t> serialize(const T& data)
     requires std::is_trivially_copyable_v<T>
 {
     auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
@@ -99,7 +121,8 @@ template <typename T> static std::vector<uint8_t> serialize(const T& data)
     return out;
 }
 
-template <typename T, int N> static T deserialize(const std::vector<uint8_t>& data)
+template<typename T, int N>
+static T deserialize(const std::vector<uint8_t>& data)
     requires std::is_trivially_copyable_v<T>
 {
     std::array<uint8_t, N> raw;
@@ -111,34 +134,41 @@ template <typename T, int N> static T deserialize(const std::vector<uint8_t>& da
 // OTOS
 /////////////////
 
-OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor, const std::string& device)
+OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor,
+           const std::string& device)
     : m_coprocessor(coprocessor),
       m_device(device) {}
 
 std::expected<void, Err> OTOS::initialize() {
     // check that the OTOS has been initialized
     if (m_initialized) {
-        return Err::make(ALREADY_INITIALIZED, "OTOS with id {} on port {} has already been initialized", m_device,
-                         m_coprocessor->get_port());
+        return Err::make(
+          ALREADY_INITIALIZED,
+          "OTOS with id {} on port {} has already been initialized",
+          m_device,
+          m_coprocessor->get_port());
     }
     // prepare data
     std::vector<uint8_t> out;
     for (auto c : m_device) out.push_back(c);
     // send data
-    auto raw = m_coprocessor->write_and_receive(topic::INITIALIZE, out, READ_TIMEOUT);
+    auto raw =
+      m_coprocessor->write_and_receive(topic::INITIALIZE, out, READ_TIMEOUT);
     // check for IO errors
     CHECK_WRITE(raw, 1);
     // check respose
     switch (raw->at(0)) {
-        case 0: {
-            m_initialized = true;
-            return {};
-        }
-        case 1: {
-            m_initialized = true;
-            // TODO: add warning here
-            return {};
-        }
+        case 0:
+            {
+                m_initialized = true;
+                return {};
+            }
+        case 1:
+            {
+                m_initialized = true;
+                // TODO: add warning here
+                return {};
+            }
         case 2: return I2CERR;
         default: return UNKNOWNERR;
     }
@@ -148,7 +178,9 @@ std::expected<Version, Err> OTOS::get_hardware_version() {
     // check that the OTOS has been initialized
     CHECK_INITIALIZE();
     // send data
-    auto raw = m_coprocessor->write_and_receive(topic::GET_HARDWARE_VERSION, {}, READ_TIMEOUT);
+    auto raw = m_coprocessor->write_and_receive(topic::GET_HARDWARE_VERSION,
+                                                {},
+                                                READ_TIMEOUT);
     // check for IO errors
     CHECK_WRITE(raw, 2);
     // check respose
@@ -162,7 +194,9 @@ std::expected<Version, Err> OTOS::get_firmware_version() {
     // check that the OTOS has been initialized
     CHECK_INITIALIZE();
     // send data
-    auto raw = m_coprocessor->write_and_receive(topic::GET_FIRMWARE_VERSION, {}, READ_TIMEOUT);
+    auto raw = m_coprocessor->write_and_receive(topic::GET_FIRMWARE_VERSION,
+                                                {},
+                                                READ_TIMEOUT);
     // check for IO errors
     CHECK_WRITE(raw, 2);
     // check respose
@@ -199,7 +233,9 @@ std::expected<bool, Err> OTOS::self_test() {
     CHECK_INITIALIZE();
     // send self test register
     res.start = 1;
-    auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_WRITE, {res.value}, READ_TIMEOUT);
+    auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_WRITE,
+                                                { res.value },
+                                                READ_TIMEOUT);
     // check for IO errors
     CHECK_WRITE(raw, 2);
     // check respose
@@ -213,7 +249,9 @@ std::expected<bool, Err> OTOS::self_test() {
     for (int i = 0; i < 10; i++) {
         pros::delay(5); // short delay between reads
         res.start = 1;
-        auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_READ, {}, READ_TIMEOUT);
+        auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_READ,
+                                                    {},
+                                                    READ_TIMEOUT);
         // check IO errors
         CHECK_WRITE(raw, 1);
         res.value = raw->at(0);
@@ -233,18 +271,19 @@ std::expected<Status, Err> OTOS::get_status() {
     // the info we receive uses bit fields
     union {
             struct {
-                    uint8_t warn_tilt_angle : 1;
+                    uint8_t warn_tilt_angle       : 1;
                     uint8_t warn_optical_tracking : 1;
-                    uint8_t reserved : 4;
-                    uint8_t fatal_error_optical : 1;
-                    uint8_t fatal_error_imu : 1;
+                    uint8_t reserved              : 4;
+                    uint8_t fatal_error_optical   : 1;
+                    uint8_t fatal_error_imu       : 1;
             };
 
             uint8_t value;
     } s;
 
     // get raw data from OTOS, and check for errors
-    auto raw = m_coprocessor->write_and_receive(topic::GET_STATUS, {}, READ_TIMEOUT);
+    auto raw =
+      m_coprocessor->write_and_receive(topic::GET_STATUS, {}, READ_TIMEOUT);
     CHECK_WRITE(raw, 1);
     // parse raw data
     s.value = raw->at(0);
