@@ -20,6 +20,22 @@ using enum Coprocessor::ErrorType;
 /////////////////
 
 /**
+ * @brief sleep for a certain number of microseconds
+ *
+ * @note this function is blocking, and does not relinquish control to the
+ * scheduler. The only way the scheduler can regain control is through
+ * preempting
+ *
+ * @param time how many microseconds to sleep for
+ */
+static void usleep(uint64_t time) {
+    const uint64_t start = pros::micros();
+    while (pros::micros() - start < time) {
+        asm volatile("nop");
+    }
+}
+
+/**
  * @brief calculate a CRC16 using CCITT-FALSE
  *
  * @param data the data to generate a crc16 for
