@@ -84,23 +84,6 @@ static std::vector<T> vector_append(std::vector<T>& v,
     return v;
 }
 
-/**
- * @brief get an object as a vector of uint8_t
- *
- * @tparam T the type of the object
- *
- * @param t the object to serialize
- *
- * @return std::vector<uint8_t> the object as a vector of uint8_t
- */
-template<typename T>
-static std::vector<uint8_t> serialize(T t) {
-    const auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(t);
-    std::vector<uint8_t> out;
-    for (const uint8_t b : raw) out.push_back(b);
-    return out;
-}
-
 //////////////////////////////////////
 // i/o helpers
 /////////////////
@@ -360,7 +343,7 @@ Coprocessor::write_and_receive(const std::string& topic,
     }
 }
 
-std::expected<int, Err> Coprocessor::initialize() {
+std::expected<void, Err> Coprocessor::initialize() {
     if (m_initialized) { // check if already initialized
         return Err::make(
           ALREADY_INITIALIZED,
@@ -384,7 +367,7 @@ std::expected<int, Err> Coprocessor::initialize() {
         auto err = write_and_receive("ping", {}, 10);
         if (err) {
             m_initialized = true;
-            return 0;
+            return {};
         } else if (err.error().type != READ_TIMEOUT) {
             return Err::add(err, "failed parsing ping response");
         }
@@ -392,7 +375,7 @@ std::expected<int, Err> Coprocessor::initialize() {
     }
 }
 
-int Coprocessor::get_port() {
+int Coprocessor::get_port() const {
     return m_port;
 }
 
