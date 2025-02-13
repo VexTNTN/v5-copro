@@ -71,8 +71,10 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
  * @brief append a vector to the another vector
  *
  * @tparam T the type of vector
+ *
  * @param v the vector to append to
  * @param data the vector that will be appended
+ *
  * @return std::vector<T> the vector that was appended to
  */
 template<typename T>
@@ -82,6 +84,15 @@ static std::vector<T> vector_append(std::vector<T>& v,
     return v;
 }
 
+/**
+ * @brief get an object as a vector of uint8_t
+ *
+ * @tparam T the type of the object
+ *
+ * @param t the object to serialize
+ *
+ * @return std::vector<uint8_t> the object as a vector of uint8_t
+ */
 template<typename T>
 static std::vector<uint8_t> serialize(T t) {
     const auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(t);
@@ -94,7 +105,15 @@ static std::vector<uint8_t> serialize(T t) {
 // i/o helpers
 /////////////////
 
-static std::expected<int, Err> enable_serial(int port) {
+/**
+ * @brief enable a port as generic serial port
+ *
+ * @param port the port to initialize as a generic serial port
+ *
+ * @return void on success
+ * @return Err on failure
+ */
+static std::expected<void, Err> enable_serial(int port) {
     if (pros::c::serial_enable(port) == PROS_ERR) {
         if (errno == EINVAL)
             return Err::make(INVALID_PORT, "port {} is not valid", port);
@@ -106,10 +125,18 @@ static std::expected<int, Err> enable_serial(int port) {
     }
     // vexos needs some time to enable serial mode on the port
     pros::delay(15);
-    return 0;
+    return {};
 }
 
-static std::expected<int, Err> set_baud_rate(int port, int baud_rate) {
+/**
+ * @brief set the baud rate of a generic serial port
+ *
+ * @param port the port to set the baud rate on
+ *
+ * @return void on success
+ * @return Err on failure
+ */
+static std::expected<void, Err> set_baud_rate(int port, int baud_rate) {
     if (pros::c::serial_set_baudrate(port, baud_rate) == PROS_ERR) {
         if (errno == EINVAL)
             return Err::make(INVALID_PORT, "port {} is not valid", port);
@@ -121,10 +148,18 @@ static std::expected<int, Err> set_baud_rate(int port, int baud_rate) {
     }
     // vexos needs some time to set the baud rate
     pros::delay(15);
-    return 0;
+    return {};
 }
 
-static std::expected<int, Err> flush(int port) {
+/**
+ * @brief flush the input and output buffers of a generic serial port
+ *
+ * @param port the port to flush the buffers of
+ *
+ * @return void on success
+ * @return Err on failure
+ */
+static std::expected<void, Err> flush(int port) {
     if (pros::c::serial_flush(port) == PROS_ERR) {
         if (errno == EINVAL)
             return Err::make(INVALID_PORT, "port {} is not valid", port);
@@ -136,9 +171,16 @@ static std::expected<int, Err> flush(int port) {
     }
     // vexos needs some time to flush the serial port
     pros::delay(15);
-    return 0;
+    return {};
 }
 
+/**
+ * @brief read a single byte from a generic serial port
+ *
+ * @param port the generic serial port to read from
+ * @return uint8_t the read byte, on success
+ * @return Err on failure
+ */
 static std::expected<uint8_t, Err> read_byte(int port) {
     int32_t raw = pros::c::serial_read_byte(port);
     // Handle timeout scenario with single retry
@@ -165,6 +207,16 @@ static std::expected<uint8_t, Err> read_byte(int port) {
     return static_cast<uint8_t>(raw);
 }
 
+/**
+ * @brief read an object from the stream
+ *
+ * @tparam T the type of the object
+ *
+ * @param port the generic serial port to read from
+ *
+ * @return T the object, on success
+ * @return Err on failure
+ */
 template<typename T>
 static std::expected<T, Err> read_stream(int port) {
     std::array<uint8_t, sizeof(T)> raw;
@@ -178,6 +230,14 @@ static std::expected<T, Err> read_stream(int port) {
     return std::bit_cast<T>(raw);
 }
 
+/**
+ * @brief read all available bytes on a generic serial port
+ *
+ * @param port the generic serial port to read from
+ *
+ * @return std::vector<uint8_t> the read bytes, on success
+ * @return Err on failure
+ */
 static std::expected<std::vector<uint8_t>, Err> read(int port) {
     // check if there's data available
     const int avail = pros::c::serial_get_read_avail(port);
@@ -219,6 +279,14 @@ static std::expected<std::vector<uint8_t>, Err> read(int port) {
     return payload;
 }
 
+/**
+ * @brief write a vector of bytes to a generic serial port
+ *
+ * @param port the generic serial port to write to
+ *
+ * @return void on success
+ * @return Err on failure
+ */
 static std::expected<void, Err> write(const std::vector<uint8_t>& message,
                                       int port) {
     std::vector<uint8_t> out;
