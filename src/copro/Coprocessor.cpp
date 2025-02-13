@@ -16,8 +16,31 @@ using Err = Error<Coprocessor::ErrorType>;
 using enum Coprocessor::ErrorType;
 
 //////////////////////////////////////
-// util functions
+// util
 /////////////////
+
+/**
+ * @brief Critical Section Helper class
+ *
+ * When an instance of this class is constructed, the program enters a critical
+ * section.
+ *
+ * When an instance of this class is destructed, the program exits the critical
+ * section
+ */
+class CriticalSection {
+    CriticalSection() {
+        asm volatile("cpsid i");
+        asm volatile("dsb");
+        asm volatile("isb");
+    }
+
+    ~CriticalSection() {
+        asm volatile("cpsie i");
+        asm volatile("dsb");
+        asm volatile("isb");
+    }
+};
 
 /**
  * @brief sleep for a certain number of microseconds
