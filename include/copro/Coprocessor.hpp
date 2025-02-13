@@ -114,10 +114,13 @@ class Coprocessor {
     int get_baud_rate() const;
 
   private:
+    std::expected<uint8_t, Error<ErrorType>> read_byte();
+    std::expected<std::vector<uint8_t>, Error<ErrorType>> read();
     std::expected<uint8_t, Error<ErrorType>> find_id(const std::string& topic);
 
     const int m_port;
     const int m_baud_rate;
+    const double m_micros_per_byte;
     bool m_initialized = false;
     pros::Mutex m_mutex;
     std::vector<std::string> m_topics = { "register", "ping", "version" };

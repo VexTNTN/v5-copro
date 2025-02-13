@@ -204,53 +204,30 @@ static std::expected<void, Err> flush(int port) {
  * @return uint8_t the read byte, on success
  * @return Err on failure
  */
-static std::expected<uint8_t, Err> read_byte(int port) {
-    int32_t raw = pros::c::serial_read_byte(port);
+std::expected<uint8_t, Err> Coprocessor::read_byte() {
+    int32_t raw = pros::c::serial_read_byte(m_port);
     // Handle timeout scenario with single retry
     if (raw == -1) {
         pros::delay(1);
-        raw = pros::c::serial_read_byte(port);
+        raw = pros::c::serial_read_byte(m_port);
         if (raw == -1)
             return Err::make(READ_TIMEOUT,
                              "transmission stopped abruptly on port {}",
-                             port);
+                             m_port);
     }
     // Handle PROS error
     if (raw == PROS_ERR) {
         if (errno == EINVAL)
-            return Err::make(INVALID_PORT, "port {} is not valid", port);
+            return Err::make(INVALID_PORT, "port {} is not valid", m_port);
         if (errno == EACCES)
             return Err::make(PORT_UNAVAILABLE,
                              "port {} is being accessed by another resource",
-                             port);
+                             m_port);
         return Err::make(UNKNOWN_FAILURE,
                          "unknown failure on generic serial port {}",
-                         port);
+                         m_port);
     }
     return static_cast<uint8_t>(raw);
-}
-
-/**
- * @brief read an object from the stream
- *
- * @tparam T the type of the object
- *
- * @param port the generic serial port to read from
- *
- * @return T the object, on success
- * @return Err on failure
- */
-template<typename T>
-static std::expected<T, Err> read_stream(int port) {
-    std::array<uint8_t, sizeof(T)> raw;
-    for (uint8_t& b : raw) {
-        if (auto c = read_byte(port)) {
-            b = c.value();
-        } else {
-            return Err::add(c, "failed to read from serial stream");
-        }
-    }
-    return std::bit_cast<T>(raw);
 }
 
 /**
@@ -261,32 +238,42 @@ static std::expected<T, Err> read_stream(int port) {
  * @return std::vector<uint8_t> the read bytes, on success
  * @return Err on failure
  */
-static std::expected<std::vector<uint8_t>, Err> read(int port) {
+std::expected<std::vector<uint8_t>, Err> Coprocessor::read() {
     // check if there's data available
-    const int avail = pros::c::serial_get_read_avail(port);
+    const int avail = pros::c::serial_get_read_avail(m_port);
     if (avail == 0) return Err::make(NO_MESSAGE, "no message available");
     if (avail == PROS_ERR) {
         if (errno == EINVAL) {
-            return Err::make(INVALID_PORT, "port {} is not valid", port);
+            return Err::make(INVALID_PORT, "port {} is not valid", m_port);
         } else if (errno == EACCES) {
             return Err::make(PORT_UNAVAILABLE,
                              "port {} is being accessed by another resource",
-                             port);
+                             m_port);
         } else {
             return Err::make(UNKNOWN_FAILURE,
                              "unknown failure on generic serial port {}",
-                             port);
+                             m_port);
         }
     }
 
     // read the header
-    const auto crc = read_stream<uint16_t>(port);
+    const auto crc = [&, this]() -> std::expected<uint16_t, Err> {
+        std::array<uint8_t, 2> raw;
+        for (uint8_t& b : raw) {
+            if (auto c = this->read_byte()) {
+                b = c.value();
+            } else {
+                return Err::add(c, "failed to read from serial stream");
+            }
+        }
+        return std::bit_cast<uint16_t>(raw);
+    }();
     if (!crc) return Err::add(crc, "failed to read CRC");
 
     // read the data
     std::vector<uint8_t> payload;
     while (true) {
-        const auto byte = read_byte(port);
+        const auto byte = read_byte();
         if (!byte) return Err::add(byte, "failed to read payload");
         payload.push_back(*byte);
     }
@@ -295,7 +282,7 @@ static std::expected<std::vector<uint8_t>, Err> read(int port) {
     if (crc != crc16(payload)) {
         return Err::make(MESSAGE_CORRUPTED,
                          "message corrupted on port {}, CRC failed",
-                         port);
+                         m_port);
     }
 
     // return payload
@@ -342,7 +329,8 @@ static std::expected<void, Err> write(const std::vector<uint8_t>& message,
 
 Coprocessor::Coprocessor(int port, int baud_rate)
     : m_port(port),
-      m_baud_rate(baud_rate) {}
+      m_baud_rate(baud_rate),
+      m_micros_per_byte(10'000'000.0 / static_cast<double>(baud_rate)) {}
 
 std::expected<std::vector<uint8_t>, Err>
 Coprocessor::write_and_receive(const std::string& topic,
@@ -369,7 +357,7 @@ Coprocessor::write_and_receive(const std::string& topic,
     // wait for a response
     const int start = pros::millis();
     while (true) {
-        auto raw = read(m_port);
+        auto raw = read();
         if (raw) {
             std::vector<uint8_t> rtn;
             rtn.insert(rtn.end(), raw->begin() + 1, raw->end());
