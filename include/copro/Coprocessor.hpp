@@ -105,6 +105,13 @@ class Coprocessor {
      * @return int the port
      */
     int get_port() const;
+    /**
+     * @brief Get the baud rate of the generic serial port used by the
+     * Coprocessor
+     *
+     * @return int the baud
+     */
+    int get_baud_rate() const;
 
   private:
     std::expected<uint8_t, Error<ErrorType>> find_id(const std::string& topic);

@@ -379,6 +379,10 @@ int Coprocessor::get_port() const {
     return m_port;
 }
 
+int Coprocessor::get_baud_rate() const {
+    return m_baud_rate;
+}
+
 std::expected<uint8_t, Err> Coprocessor::find_id(const std::string& topic) {
     // if not initialized, bail
     if (!m_initialized)
