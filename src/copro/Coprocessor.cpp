@@ -29,6 +29,7 @@ using enum Coprocessor::ErrorType;
  * section
  */
 class CriticalSection {
+  public:
     CriticalSection() {
         asm volatile("cpsid i");
         asm volatile("dsb");
@@ -318,6 +319,7 @@ static std::expected<void, Err> write(const std::vector<uint8_t>& message,
     vector_append(out, message);
 
     // write encoded message
+    CriticalSection s;
     if (pros::c::serial_write(port, out.data(), out.size()) == PROS_ERR) {
         if (errno == EINVAL)
             return Err::make(INVALID_PORT, "port {} is not valid", port);
