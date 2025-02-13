@@ -16,17 +16,6 @@ using Err = Error<Coprocessor::ErrorType>;
 using enum Coprocessor::ErrorType;
 
 //////////////////////////////////////
-// constants
-/////////////////
-
-constexpr uint8_t ZERO_BYTE = 0x0;
-constexpr uint8_t PTR_BYTE = 0xFF;
-
-constexpr uint8_t DELIMITER_1 = 0xAA;
-constexpr uint8_t DELIMITER_2 = 0x55;
-constexpr uint8_t ESCAPE = 0xBB;
-
-//////////////////////////////////////
 // util functions
 /////////////////
 
@@ -101,64 +90,6 @@ static std::vector<uint8_t> serialize(T t) {
     return out;
 }
 
-/**
- * @brief use COBS to encode data
- *
- * @param data the data to encode
- * @return std::vector<uint8_t> the encoded data
- */
-static std::vector<uint8_t> encode(const std::vector<uint8_t>& message) {
-    std::vector<uint8_t> out({ 0 });
-    int last_zero = 0;
-    std::vector<uint8_t> data = message;
-    data.push_back(ZERO_BYTE); // add delimiter
-    // encode
-    for (int i = 0; i < data.size(); i++) {
-        // if the last zero byte is 255 bytes away, insert a pointer byte
-        if (out.size() - 1 - last_zero == 255) {
-            out.at(last_zero) = PTR_BYTE;
-            out.push_back(ZERO_BYTE);
-            last_zero = out.size() - 1;
-        }
-        // add the next byte to the output vector
-        const uint8_t byte = data.at(i);
-        out.push_back(byte);
-        // if the current byte is a zero byte, update the last zero and save
-        // index
-        if (byte == ZERO_BYTE) {
-            out.at(last_zero) = out.size() - 1 - last_zero;
-            last_zero = out.size() - 1;
-        }
-    }
-    return out;
-}
-
-/**
- * @brief decode COBS-encoded data
- *
- * @param data the data to decode
- * @return std::vector<uint8_t> the decoded data
- */
-static std::vector<uint8_t> decode(const std::vector<uint8_t>& message) {
-    std::vector<uint8_t> out;
-    int next_zero = 0;
-    bool ptr_byte = true;
-    // decode
-    for (int i = 0; i < message.size() - 1; i++) {
-        const uint8_t byte = message.at(i);
-        out.push_back(byte);
-        if (i == next_zero) { // handle zero byte
-            next_zero += byte;
-            out.at(out.size() - 1) = ZERO_BYTE;
-            // handle pointer byte
-            if (ptr_byte) out.pop_back();
-            ptr_byte = (byte == PTR_BYTE);
-        }
-    }
-    // return decoded data
-    return out;
-}
-
 //////////////////////////////////////
 // i/o helpers
 /////////////////
@@ -208,31 +139,6 @@ static std::expected<int, Err> flush(int port) {
     return 0;
 }
 
-static std::expected<uint8_t, Err> peek_byte(int port) {
-    int32_t raw = pros::c::serial_peek_byte(port);
-    // Handle timeout scenario with single retry
-    if (raw == -1) {
-        pros::delay(1);
-        raw = pros::c::serial_peek_byte(port);
-        if (raw == -1)
-            return Err::make(READ_TIMEOUT, "transmission stopped abruptly");
-    }
-    // Handle PROS error
-    if (raw == PROS_ERR) {
-        if (errno == EINVAL)
-            return Err::make(INVALID_PORT, "port {} is not valid", port);
-        if (errno == EACCES)
-            return Err::make(PORT_UNAVAILABLE,
-                             "port {} is being accessed by another resource",
-                             port);
-        return Err::make(UNKNOWN_FAILURE,
-                         "unknown failure on generic serial port {}",
-                         port);
-    }
-    // return peeked byte
-    return static_cast<uint8_t>(raw);
-}
-
 static std::expected<uint8_t, Err> read_byte(int port) {
     int32_t raw = pros::c::serial_read_byte(port);
     // Handle timeout scenario with single retry
@@ -263,10 +169,11 @@ template<typename T>
 static std::expected<T, Err> read_stream(int port) {
     std::array<uint8_t, sizeof(T)> raw;
     for (uint8_t& b : raw) {
-        if (auto c = read_byte(port))
+        if (auto c = read_byte(port)) {
             b = c.value();
-        else
+        } else {
             return Err::add(c, "failed to read from serial stream");
+        }
     }
     return std::bit_cast<T>(raw);
 }
@@ -276,38 +183,37 @@ static std::expected<std::vector<uint8_t>, Err> read(int port) {
     const int avail = pros::c::serial_get_read_avail(port);
     if (avail == 0) return Err::make(NO_MESSAGE, "no message available");
     if (avail == PROS_ERR) {
-        if (errno == EINVAL)
+        if (errno == EINVAL) {
             return Err::make(INVALID_PORT, "port {} is not valid", port);
-        if (errno == EACCES)
+        } else if (errno == EACCES) {
             return Err::make(PORT_UNAVAILABLE,
                              "port {} is being accessed by another resource",
                              port);
-        return Err::make(UNKNOWN_FAILURE,
-                         "unknown failure on generic serial port {}",
-                         port);
+        } else {
+            return Err::make(UNKNOWN_FAILURE,
+                             "unknown failure on generic serial port {}",
+                             port);
+        }
     }
 
     // read the header
     const auto crc = read_stream<uint16_t>(port);
     if (!crc) return Err::add(crc, "failed to read CRC");
 
-    // read the encoded data
+    // read the data
     std::vector<uint8_t> payload;
     while (true) {
         const auto byte = read_byte(port);
         if (!byte) return Err::add(byte, "failed to read payload");
         payload.push_back(*byte);
-        if (*byte == ZERO_BYTE) break;
     }
 
-    // decode the data
-    const auto data = decode(payload);
-
     // validate payload with CRC
-    if (crc != crc16(data))
+    if (crc != crc16(payload)) {
         return Err::make(MESSAGE_CORRUPTED,
                          "message corrupted on port {}, CRC failed",
                          port);
+    }
 
     // return payload
     return payload;
@@ -318,8 +224,8 @@ static std::expected<void, Err> write(const std::vector<uint8_t>& message,
     std::vector<uint8_t> out;
     // add the CRC16
     vector_append(out, serialize(crc16(message)));
-    // encode the message
-    vector_append(out, encode(message));
+    // add the message
+    vector_append(out, message);
 
     // write encoded message
     if (pros::c::serial_write(port, out.data(), out.size()) == PROS_ERR) {
