@@ -55,15 +55,11 @@ using Version = OTOS::Version;
               m_coprocessor->get_port());
 
 // macro to simplify returning an unknown error
-#define UNKNOWNERR                                                             \
-    Err::make(                                                                 \
-      UNKNOWN,                                                                 \
-      "unknown error response when trying to interact with OTOS with " "id "   \
-                                                                       "{} "   \
-                                                                       "on "   \
-                                                                       "port " \
-                                                                       "{}",   \
-      m_device,                                                                \
+#define UNKNOWNERR                                                                                     \
+    Err::make(                                                                                         \
+      UNKNOWN,                                                                                         \
+      "unknown error response when trying to interact with OTOS with " "id " "{} " "on " "port " "{}", \
+      m_device,                                                                                        \
       m_coprocessor->get_port());
 
 //////////////////////////////////////
@@ -208,25 +204,25 @@ std::expected<Version, Err> OTOS::get_firmware_version() {
 
 std::expected<bool, Err> OTOS::self_test() {
     union {
-            struct {
-                    /// @brief Write 1 to start the self test
-                    uint8_t start : 1;
+        struct {
+            /// @brief Write 1 to start the self test
+            uint8_t start : 1;
 
-                    /// @brief Returns 1 while the self test is in progress
-                    uint8_t inProgress : 1;
+            /// @brief Returns 1 while the self test is in progress
+            uint8_t inProgress : 1;
 
-                    /// @brief Returns 1 if the self test passed
-                    uint8_t pass : 1;
+            /// @brief Returns 1 if the self test passed
+            uint8_t pass : 1;
 
-                    /// @brief Returns 1 if the self test failed
-                    uint8_t fail : 1;
+            /// @brief Returns 1 if the self test failed
+            uint8_t fail : 1;
 
-                    /// @brief Reserved bits, do not use
-                    uint8_t reserved : 4;
-            };
+            /// @brief Reserved bits, do not use
+            uint8_t reserved : 4;
+        };
 
-            /// @brief Raw register value
-            uint8_t value;
+        /// @brief Raw register value
+        uint8_t value;
     } res;
 
     // check that the OTOS has been initialized
@@ -270,15 +266,15 @@ std::expected<Status, Err> OTOS::get_status() {
 
     // the info we receive uses bit fields
     union {
-            struct {
-                    uint8_t warn_tilt_angle       : 1;
-                    uint8_t warn_optical_tracking : 1;
-                    uint8_t reserved              : 4;
-                    uint8_t fatal_error_optical   : 1;
-                    uint8_t fatal_error_imu       : 1;
-            };
+        struct {
+            uint8_t warn_tilt_angle       : 1;
+            uint8_t warn_optical_tracking : 1;
+            uint8_t reserved              : 4;
+            uint8_t fatal_error_optical   : 1;
+            uint8_t fatal_error_imu       : 1;
+        };
 
-            uint8_t value;
+        uint8_t value;
     } s;
 
     // get raw data from OTOS, and check for errors
