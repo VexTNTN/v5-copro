@@ -1,128 +1,132 @@
-#include "copro/OTOS.hpp"
+#include "OTOS.hpp"
 #include "Coprocessor.hpp"
+#include "pros/error.h"
+#include "pros/rtos.hpp"
 #include <cmath>
-#include <limits>
+#include <iostream>
+#include <mutex>
+#include <system_error>
 
-namespace copro {
+// getCoprocessorVersion,         // 0 // low prio
+// otos::getStatus,               // 1 // done
+// otos::getVersion,              // 2 // low prio
+// otos::resetTracking,           // 3 // done
+// otos::getPosVelAccel,          // 4 // low prio
+// otos::getPosVelAccelStdDev,    // 5 // low prio
+// otos::getPosVelAccelAndStdDev, // 6 // low prio
+// otos::getPose,                 // 7  // done
+// otos::setPose,                 // 8  // done
+// otos::getPositionStdDev,       // 9  // low prio
+// otos::getVelocity,             // 10 // low prio
+// otos::getVelocityStdDev,       // 11 // low prio
+// otos::getAcceleration,         // 12 // low prio
+// otos::getAccelerationStdDev,   // 13 // low prio
+// otos::getLinearUnit,           // 14 // unnecessary
+// otos::setLinearUnit,           // 15 // unnecessary
+// otos::getAngularUnit,          // 16 // unnecessary
+// otos::setAngularUnit,          // 17 // unnecessary
+// otos::getLinearScalar,         // 18 // done
+// otos::setLinearScalar,         // 19 // done
+// otos::getAngularScalar,        // 20 // done
+// otos::setAngularScalar,        // 21 // done
+// otos::getSignalProcessConfig,  // 22 // low prio
+// otos::setSignalProcessConfig,  // 23 // low prio
+// otos::selfTest,                // 24 // done
+// otos::calibrate,               // 25 // done
+// otos::isCalibrated,            // 26 // done
+// otos::getOffset,               // 27 // impossible until FW bug fixed
+// otos::setOffset                // 28 // done
 
-//////////////////////////////////////
-// using
-/////////////////
-
-using Err = Error<OTOS::ErrorType>;
-using enum OTOS::ErrorType;
-using Status = OTOS::Status;
-using Version = OTOS::Version;
-
-//////////////////////////////////////
-// macros
-/////////////////
-
-// macro to simplify checking write_and_receive
-#define CHECK_WRITE(response, num)                                        \
-    if (!response) {                                                      \
-        return Err::add(                                                  \
-          RS485_IO,                                                       \
-          response,                                                       \
-          "failed to send command to OTOS with id {} on port {}",         \
-          m_device,                                                       \
-          m_coprocessor->get_port());                                     \
-    }                                                                     \
-    if (response->size() != num) {                                        \
-        return Err::make(                                                 \
-          INCORRECT_RESPONSE_SIZE,                                        \
-          "expected response size of {} from OTOS with id {} on port {}", \
-          num,                                                            \
-          m_device,                                                       \
-          m_coprocessor->get_port());                                     \
-    }
-
-// macro to simplify checking whether the OTOS has been initialized
-#define CHECK_INITIALIZE()                                       \
-    if (!m_initialized) {                                        \
-        return Err::make(                                        \
-          NOT_INITIALIZED,                                       \
-          "OTOS with id {} on port {} has not been initialized", \
-          m_device,                                              \
-          m_coprocessor->get_port());                            \
-    }
-
-// macro to simplify returning an I2C_IO error
-#define I2CERR                                                      \
-    Err::make(I2C_IO,                                               \
-              "failed to interact with OTOS with id {} on port {}", \
-              m_device,                                             \
-              m_coprocessor->get_port());
-
-// macro to simplify returning an unknown error
-#define UNKNOWNERR                                                                                     \
-    Err::make(                                                                                         \
-      UNKNOWN,                                                                                         \
-      "unknown error response when trying to interact with OTOS with " "id " "{} " "on " "port " "{}", \
-      m_device,                                                                                        \
-      m_coprocessor->get_port());
+namespace otos {
 
 //////////////////////////////////////
 // constants
 /////////////////
-constexpr Version PROTOCOL_VERSION {
-    .major = 0,
-    .minor = 1,
-};
-constexpr int READ_TIMEOUT = 5;
+constexpr int READ_TIMEOUT = 20;
 
-namespace topic {
-constexpr const char* INITIALIZE = "otos/initialize";
-constexpr const char* GET_HARDWARE_VERSION = "otos/get_hardware_version";
-constexpr const char* GET_FIRMWARE_VERSION = "otos/get_firmware_version";
-constexpr const char* SELF_TEST_WRITE = "otos/self_test_write";
-constexpr const char* SELF_TEST_READ = "otos/self_test_read";
-constexpr const char* CALIBRATE_IMU = "otos/calibrate_imu";
-constexpr const char* IS_IMU_CALIBRATED = "otos/is_imu_calibrated";
-constexpr const char* GET_LINEAR_SCALAR = "otos/get_linear_scalar";
-constexpr const char* SET_LINEAR_SCALAR = "otos/set_linear_scalar";
-constexpr const char* GET_ANGULAR_SCALAR = "otos/get_angular_scalar";
-constexpr const char* SET_ANGULAR_SCALAR = "otos/set_angular_scalar";
-constexpr const char* GET_STATUS = "otos/get_status";
-constexpr const char* GET_OFFSET = "otos/get_offset";
-constexpr const char* SET_OFFSET = "otos/set_offset";
-constexpr const char* GET_POSE = "otos/get_pose";
-constexpr const char* SET_POSE = "otos/set_pose";
-constexpr const char* GET_VELOCITY = "otos/get_velocity";
-constexpr const char* GET_ACCELERATION = "otos/get_acceleration";
-} // namespace topic
+constexpr float kRadianToDegree = 180.0 / 3.14159;
+constexpr float kDegreeToRadian = 3.14159 / 180.0;
+constexpr float kMeterToInch = 39.3701;
+constexpr float kInchToMeter = 1.0 / kMeterToInch;
 
-constexpr float RADIAN_TO_DEGREE = 180.0 / 3.14159;
-constexpr float METER_TO_INCH = 39.3701;
-constexpr float METER_TO_INT16 = 32768.0 / 10.0;
-constexpr float INT16_TO_METER = 1.0 / METER_TO_INT16;
-constexpr float INT16_TO_INCH = INT16_TO_METER * METER_TO_INCH;
-constexpr float INCH_TO_INT16 = 1.0 / INT16_TO_INCH;
-constexpr float RAD_TO_INT16 = 32768.0 / 3.14159;
-constexpr float INT16_TO_RAD = 1.0 / RAD_TO_INT16;
-constexpr float INT16_TO_DEG = INT16_TO_RAD * RADIAN_TO_DEGREE;
-constexpr float DEG_TO_INT16 = 1.0 / INT16_TO_DEG;
+constexpr float kMeterToInt16 = 32768.0 / 10.0;
+constexpr float kInt16ToMeter = 1.0 / kMeterToInt16;
+constexpr float kInt16ToInch = kInt16ToMeter * kMeterToInch;
+constexpr float kInchToInt16 = 1.0 / kInt16ToInch;
+
+constexpr float kRadToInt16 = 32768.0 / 3.14159;
+constexpr float kInt16ToRad = 1.0 / kRadToInt16;
+constexpr float kInt16ToDeg = kInt16ToRad * kRadianToDegree;
+constexpr float kDegToInt16 = 1.0 / kInt16ToDeg;
+
+static pros::Mutex mutex;
 
 //////////////////////////////////////
 // util
 /////////////////
 
+static std::vector<uint8_t> write_and_receive(uint8_t id,
+                                              const std::vector<uint8_t>& data,
+                                              int timeout) noexcept {
+    std::lock_guard lock(mutex);
+    // prepare data
+    std::vector<uint8_t> out;
+    out.push_back(id);
+    out.insert(out.end(), data.begin(), data.end());
+    // write data
+    try {
+        copro::write(out);
+    } catch (std::system_error& e) {
+        std::cout << e.code() << std::endl;
+        errno = e.code().value();
+        return {};
+    }
+    // wait for a response
+    const int start = pros::millis();
+    while (true) {
+        try {
+            auto raw = copro::read();
+            std::vector<uint8_t> rtn;
+            rtn.insert(rtn.end(), raw.begin() + 1, raw.end());
+            return rtn;
+        } catch (std::system_error& e) {
+            if (e.code().value() == ENODATA) {
+                if (pros::millis() - start > timeout) {
+                    std::cout << e.code() << std::endl;
+                    errno = e.code().value();
+                    return {};
+                } else {
+                    continue;
+                }
+            } else {
+                std::cout << e.code() << std::endl;
+                errno = e.code().value();
+                return {};
+            }
+        }
+    }
+}
+
 template<typename T>
-static std::vector<uint8_t> serialize(const T& data)
-    requires std::is_trivially_copyable_v<T>
-{
+static std::vector<uint8_t> serialize(const T& data) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "Type must be trivially copyable");
     auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
     std::vector<uint8_t> out(sizeof(T));
-    for (int i = 0; i < sizeof(T); ++i) out.at(i) = raw.at(i);
+    for (int i = 0; i < sizeof(T); ++i) {
+        out.at(i) = raw.at(i);
+    }
     return out;
 }
 
 template<typename T, int N>
-static T deserialize(const std::vector<uint8_t>& data)
-    requires std::is_trivially_copyable_v<T>
-{
+static T deserialize(const std::vector<uint8_t>& data) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "Type must be trivially copyable");
     std::array<uint8_t, N> raw;
-    for (int i = 0; i < N; ++i) raw.at(i) = data.at(i);
+    for (int i = 0; i < N; ++i) {
+        raw.at(i) = data.at(i);
+    }
     return std::bit_cast<T>(raw);
 }
 
@@ -130,167 +134,252 @@ static T deserialize(const std::vector<uint8_t>& data)
 // OTOS
 /////////////////
 
-OTOS::OTOS(std::shared_ptr<copro::Coprocessor> coprocessor,
-           const std::string& device)
-    : m_coprocessor(coprocessor),
-      m_device(device) {}
+Status getStatus() noexcept {
+    constexpr int ID = 1;
 
-std::expected<void, Err> OTOS::initialize() {
-    // check that the OTOS has been initialized
-    if (m_initialized) {
-        return Err::make(
-          ALREADY_INITIALIZED,
-          "OTOS with id {} on port {} has already been initialized",
-          m_device,
-          m_coprocessor->get_port());
-    }
-    // prepare data
-    std::vector<uint8_t> out;
-    for (auto c : m_device) out.push_back(c);
-    // send data
-    auto raw =
-      m_coprocessor->write_and_receive(topic::INITIALIZE, out, READ_TIMEOUT);
-    // check for IO errors
-    CHECK_WRITE(raw, 1);
-    // check respose
-    switch (raw->at(0)) {
-        case 0:
-            {
-                m_initialized = true;
-                return {};
-            }
-        case 1:
-            {
-                m_initialized = true;
-                // TODO: add warning here
-                return {};
-            }
-        case 2: return I2CERR;
-        default: return UNKNOWNERR;
-    }
-}
-
-std::expected<Version, Err> OTOS::get_hardware_version() {
-    // check that the OTOS has been initialized
-    CHECK_INITIALIZE();
-    // send data
-    auto raw = m_coprocessor->write_and_receive(topic::GET_HARDWARE_VERSION,
-                                                {},
-                                                READ_TIMEOUT);
-    // check for IO errors
-    CHECK_WRITE(raw, 2);
-    // check respose
-    switch (raw->at(0)) {
-        case std::numeric_limits<uint8_t>::max(): return I2CERR;
-        default: return Version(raw->at(0), raw->at(1));
-    }
-}
-
-std::expected<Version, Err> OTOS::get_firmware_version() {
-    // check that the OTOS has been initialized
-    CHECK_INITIALIZE();
-    // send data
-    auto raw = m_coprocessor->write_and_receive(topic::GET_FIRMWARE_VERSION,
-                                                {},
-                                                READ_TIMEOUT);
-    // check for IO errors
-    CHECK_WRITE(raw, 2);
-    // check respose
-    switch (raw->at(0)) {
-        case std::numeric_limits<uint8_t>::max(): return I2CERR;
-        default: return Version(raw->at(0), raw->at(1));
-    }
-}
-
-std::expected<bool, Err> OTOS::self_test() {
-    union {
-        struct {
-            /// @brief Write 1 to start the self test
-            uint8_t start : 1;
-
-            /// @brief Returns 1 while the self test is in progress
-            uint8_t inProgress : 1;
-
-            /// @brief Returns 1 if the self test passed
-            uint8_t pass : 1;
-
-            /// @brief Returns 1 if the self test failed
-            uint8_t fail : 1;
-
-            /// @brief Reserved bits, do not use
-            uint8_t reserved : 4;
-        };
-
-        /// @brief Raw register value
-        uint8_t value;
-    } res;
-
-    // check that the OTOS has been initialized
-    CHECK_INITIALIZE();
-    // send self test register
-    res.start = 1;
-    auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_WRITE,
-                                                { res.value },
-                                                READ_TIMEOUT);
-    // check for IO errors
-    CHECK_WRITE(raw, 2);
-    // check respose
-    switch (raw->at(0)) {
-        case 0: break; // no errors
-        case 1: return I2CERR;
-        default: return UNKNOWNERR;
-    }
-
-    // loop until self test is done
-    for (int i = 0; i < 10; i++) {
-        pros::delay(5); // short delay between reads
-        res.start = 1;
-        auto raw = m_coprocessor->write_and_receive(topic::SELF_TEST_READ,
-                                                    {},
-                                                    READ_TIMEOUT);
-        // check IO errors
-        CHECK_WRITE(raw, 1);
-        res.value = raw->at(0);
-        // check response
-        if (res.value == std::numeric_limits<uint8_t>::max()) return I2CERR;
-        if (!res.inProgress) break;
-    }
-
-    // check if the self test passed
-    return static_cast<bool>(res.pass == 1);
-}
-
-std::expected<Status, Err> OTOS::get_status() {
-    // check that the OTOS has been initialized
-    CHECK_INITIALIZE();
-
-    // the info we receive uses bit fields
     union {
         struct {
             uint8_t warn_tilt_angle       : 1;
             uint8_t warn_optical_tracking : 1;
             uint8_t reserved              : 4;
-            uint8_t fatal_error_optical   : 1;
-            uint8_t fatal_error_imu       : 1;
+            uint8_t optical_fatal         : 1;
+            uint8_t imu_fatal             : 1;
         };
 
         uint8_t value;
     } s;
 
-    // get raw data from OTOS, and check for errors
-    auto raw =
-      m_coprocessor->write_and_receive(topic::GET_STATUS, {}, READ_TIMEOUT);
-    CHECK_WRITE(raw, 1);
-    // parse raw data
-    s.value = raw->at(0);
-    if (s.value == std::numeric_limits<uint8_t>::max()) return I2CERR;
-    // return data
-    return Status {
-        .warn_tilt_angle = static_cast<bool>(s.warn_tilt_angle),
-        .warn_optical_tracking = static_cast<bool>(s.warn_optical_tracking),
-        .fatal_error_optical = static_cast<bool>(s.fatal_error_optical),
-        .fatal_error_imu = static_cast<bool>(s.fatal_error_imu),
-    };
+    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (raw.empty()) {
+        return { 0, 0, 0, 0, 1 };
+    } else {
+        s.value = raw.at(0);
+        return { static_cast<bool>(s.warn_tilt_angle),
+                 static_cast<bool>(s.warn_optical_tracking),
+                 static_cast<bool>(s.optical_fatal),
+                 static_cast<bool>(s.imu_fatal),
+                 0 };
+    }
 }
 
-} // namespace copro
+int selfTest() noexcept {
+    constexpr int ID = 24;
+    const auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (raw.empty()) {
+        return PROS_ERR;
+    } else {
+        return static_cast<int>(raw.at(0));
+    }
+}
+
+int resetTracking() noexcept {
+    constexpr int ID = 3;
+    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (raw.empty()) {
+        return PROS_ERR;
+    } else {
+        return static_cast<int>(raw.at(0));
+    }
+}
+
+//////////////////////////////////////
+// pose
+/////////////////
+
+Pose get_pose() noexcept {
+    constexpr int ID = 7;
+    constexpr Pose ERROR = { std::numeric_limits<float>::infinity(),
+                             std::numeric_limits<float>::infinity(),
+                             std::numeric_limits<float>::infinity() };
+
+    // request, receive
+    auto tmp = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (tmp.empty()) {
+        return ERROR;
+    }
+
+    // error checking
+    bool err = true;
+    for (uint8_t b : tmp) {
+        if (b != 1) {
+            err = false;
+        }
+    }
+    if (err) {
+        return ERROR;
+    }
+
+    // parse raw data
+    int16_t rawX = (tmp[1] << 8) | tmp[0];
+    int16_t rawY = (tmp[3] << 8) | tmp[2];
+    int16_t rawH = (tmp[5] << 8) | tmp[4];
+
+    return { rawX * kInt16ToInch, rawY * kInt16ToInch, rawH * kInt16ToDeg };
+}
+
+int set_pose(Pose pose) noexcept {
+    constexpr int ID = 8;
+    // cast
+    int16_t rawX = (pose.x * kInchToInt16);
+    int16_t rawY = (pose.y * kInchToInt16);
+    int16_t rawH = (pose.h * kDegToInt16);
+    // init vector
+    std::vector<uint8_t> out(6, 0);
+    // serialize
+    out[0] = rawX & 0xFF;
+    out[1] = (rawX >> 8) & 0xFF;
+    out[2] = rawY & 0xFF;
+    out[3] = (rawY >> 8) & 0xFF;
+    out[4] = rawH & 0xFF;
+    out[5] = (rawH >> 8) & 0xFF;
+    // write and get response
+    auto raw = write_and_receive(ID, out, READ_TIMEOUT);
+    pros::delay(10);
+    if (raw.empty()) {
+        return PROS_ERR;
+    } else {
+        // check that the pose was actually set
+        auto p = get_pose();
+        // check for error
+        if (p.x == INFINITY) {
+            std::cout << "Fuck" << std::endl;
+            return PROS_ERR;
+        }
+        // check that all the fields are the same
+        printf("p.x: %.2f, pose.x: %.2f\n", p.x, pose.x);
+        if (std::fabs(p.x - pose.x) > 1) {
+            std::cout << "fuck2" << std::endl;
+            return PROS_ERR;
+        }
+
+        if (std::fabs(p.y - pose.y) > 1) {
+            std::cout << "fuck3" << std::endl;
+            return PROS_ERR;
+        }
+
+        if (std::fabs(p.h - pose.h) > 1) {
+            std::cout << "fuck4" << std::endl;
+            return PROS_ERR;
+        }
+        // success
+        return static_cast<int>(raw.at(0));
+    }
+}
+
+//////////////////////////////////////
+// offset
+/////////////////
+
+int set_offset(Pose pose) noexcept {
+    constexpr int ID = 28;
+    // cast
+    int16_t rawX = (pose.x * kInchToInt16);
+    int16_t rawY = (pose.y * kInchToInt16);
+    int16_t rawH = (pose.h * kDegToInt16);
+    // init vector
+    std::vector<uint8_t> out(6, 0);
+    // serialize
+    out[0] = rawX & 0xFF;
+    out[1] = (rawX >> 8) & 0xFF;
+    out[2] = rawY & 0xFF;
+    out[3] = (rawY >> 8) & 0xFF;
+    out[4] = rawH & 0xFF;
+    out[5] = (rawH >> 8) & 0xFF;
+    // write and get response
+    auto raw = write_and_receive(ID, out, READ_TIMEOUT);
+    if (raw.empty()) {
+        return PROS_ERR;
+    } else {
+        return static_cast<int>(raw.at(0));
+    }
+}
+
+//////////////////////////////////////
+// linear scalar
+/////////////////
+
+float get_linear_scalar() noexcept {
+    constexpr int ID = 18;
+    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (raw.empty()) {
+        return std::numeric_limits<float>::infinity();
+    } else {
+        return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
+    }
+}
+
+int set_linear_scalar(float scalar) noexcept {
+    constexpr int ID = 19;
+    auto raw = std::bit_cast<uint8_t>(
+      static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
+    auto err = write_and_receive(ID, { raw }, READ_TIMEOUT);
+    if (err.empty()) {
+        return PROS_ERR;
+    } else {
+        // check that the linear scalar was actually set
+        auto s = get_linear_scalar();
+        // check for error
+        if (s == INFINITY) return PROS_ERR;
+        std::cout << "Linear Scaler: " << s << std::endl;
+        // check that the field is the same
+        if (std::abs(s - scalar) > 0.02) return PROS_ERR;
+        return 0;
+    }
+}
+
+//////////////////////////////////////
+// angular scalar
+/////////////////
+
+float get_angular_scalar() noexcept {
+    constexpr int ID = 20;
+    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (raw.empty()) {
+        return std::numeric_limits<float>::infinity();
+    } else {
+        return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
+    }
+}
+
+int set_angular_scalar(float scalar) noexcept {
+    constexpr int ID = 21;
+    auto raw = std::bit_cast<uint8_t>(
+      static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
+    auto err = write_and_receive(ID, { raw }, READ_TIMEOUT);
+    if (err.empty()) {
+        return PROS_ERR;
+    } else {
+        // check that the angular scalar was actually set
+        auto s = get_angular_scalar();
+        // check for error
+        if (s == INFINITY) return PROS_ERR;
+        std::cout << "Angular Scaler: " << s << std::endl;
+        // check that the field is the same
+        if (std::abs(s - scalar) > 0.02) return PROS_ERR;
+        return 0;
+    }
+}
+
+//////////////////////////////////////
+// calibrate
+/////////////////
+
+int calibrate(uint8_t samples) noexcept {
+    constexpr int ID = 25;
+    auto err = write_and_receive(ID, { samples }, READ_TIMEOUT);
+    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) {
+        return PROS_ERR;
+    }
+    return err.at(0);
+}
+
+int isCalibrated() noexcept {
+    constexpr int ID = 26;
+    auto err = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) {
+        return PROS_ERR;
+    }
+    return err.at(0);
+}
+
+} // namespace otos
