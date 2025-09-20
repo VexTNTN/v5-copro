@@ -9,6 +9,8 @@ struct Pose {
     float h;
 };
 
+using Acceleration = Pose;
+
 struct Status {
     bool warn_tilt_angle;
     bool warn_optical_tracking;
@@ -30,6 +32,12 @@ int resetTracking() noexcept;
 Pose get_pose() noexcept;
 
 int set_pose(Pose pose) noexcept;
+
+//////////////////////////////////////
+// acceleration
+/////////////////
+
+Acceleration get_acceleration() noexcept;
 
 //////////////////////////////////////
 // offset

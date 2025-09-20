@@ -19,7 +19,9 @@
 // otos::getPositionStdDev,       // 9  // low prio
 // otos::getVelocity,             // 10 // low prio
 // otos::getVelocityStdDev,       // 11 // low prio
-// otos::getAcceleration,         // 12 // low prio
+
+// otos::getAcceleration,         // 12 // in progress
+
 // otos::getAccelerationStdDev,   // 13 // low prio
 // otos::getLinearUnit,           // 14 // unnecessary
 // otos::setLinearUnit,           // 15 // unnecessary
@@ -58,6 +60,12 @@ constexpr float kRadToInt16 = 32768.0 / 3.14159;
 constexpr float kInt16ToRad = 1.0 / kRadToInt16;
 constexpr float kInt16ToDeg = kInt16ToRad * kRadianToDegree;
 constexpr float kDegToInt16 = 1.0 / kInt16ToDeg;
+
+static constexpr float kMpssToInt16 = 32768.0f / (16.0f * 9.80665f);
+static constexpr float kInt16ToMpss = 1.0f / kMpssToInt16;
+
+static constexpr float kRpssToInt16 = 32768.0f / (M_PI * 1000.0f);
+static constexpr float kInt16ToRpss = 1.0f / kRpssToInt16;
 
 static pros::Mutex mutex;
 
@@ -192,7 +200,7 @@ Pose get_pose() noexcept {
                              std::numeric_limits<float>::infinity(),
                              std::numeric_limits<float>::infinity() };
 
-    // request, receive
+    // request, recieve
     auto tmp = write_and_receive(ID, {}, READ_TIMEOUT);
     if (tmp.empty()) {
         return ERROR;
@@ -264,6 +272,43 @@ int set_pose(Pose pose) noexcept {
         // success
         return static_cast<int>(raw.at(0));
     }
+}
+
+//////////////////////////////////////
+// acceleration
+/////////////////
+
+Acceleration get_acceleration() noexcept {
+    constexpr int ID = 12;
+    constexpr Pose ERROR = { std::numeric_limits<float>::infinity(),
+                             std::numeric_limits<float>::infinity(),
+                             std::numeric_limits<float>::infinity() };
+
+    // request, recieve
+    auto tmp = write_and_receive(ID, {}, READ_TIMEOUT);
+    if (tmp.empty()) {
+        return ERROR;
+    }
+
+    // error checking
+    bool err = true;
+    for (uint8_t b : tmp) {
+        if (b != 1) {
+            err = false;
+        }
+    }
+    if (err) {
+        return ERROR;
+    }
+
+    // parse raw data
+    int16_t rawX = (tmp[1] << 8) | tmp[0];
+    int16_t rawY = (tmp[3] << 8) | tmp[2];
+    int16_t rawH = (tmp[5] << 8) | tmp[4];
+
+    return { rawX * kInt16ToMpss * kMeterToInch,
+             rawY * kInt16ToMpss * kMeterToInch,
+             static_cast<float>(rawH * kInt16ToRpss / 360.0) };
 }
 
 //////////////////////////////////////
