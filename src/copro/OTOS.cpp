@@ -69,79 +69,6 @@ static constexpr float kInt16ToRpss = 1.0f / kRpssToInt16;
 
 static pros::Mutex mutex;
 
-//////////////////////////////////////
-// util
-/////////////////
-
-static std::vector<uint8_t> write_and_receive(uint8_t id,
-                                              const std::vector<uint8_t>& data,
-                                              int timeout) noexcept {
-    std::lock_guard lock(mutex);
-    // prepare data
-    std::vector<uint8_t> out;
-    out.push_back(id);
-    out.insert(out.end(), data.begin(), data.end());
-    // write data
-    try {
-        copro::write(out);
-    } catch (std::system_error& e) {
-        std::cout << e.code() << std::endl;
-        errno = e.code().value();
-        return {};
-    }
-    // wait for a response
-    const int start = pros::millis();
-    while (true) {
-        try {
-            auto raw = copro::read();
-            std::vector<uint8_t> rtn;
-            rtn.insert(rtn.end(), raw.begin() + 1, raw.end());
-            return rtn;
-        } catch (std::system_error& e) {
-            if (e.code().value() == ENODATA) {
-                if (pros::millis() - start > timeout) {
-                    std::cout << e.code() << std::endl;
-                    errno = e.code().value();
-                    return {};
-                } else {
-                    continue;
-                }
-            } else {
-                std::cout << e.code() << std::endl;
-                errno = e.code().value();
-                return {};
-            }
-        }
-    }
-}
-
-template<typename T>
-static std::vector<uint8_t> serialize(const T& data) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
-    auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
-    std::vector<uint8_t> out(sizeof(T));
-    for (int i = 0; i < sizeof(T); ++i) {
-        out.at(i) = raw.at(i);
-    }
-    return out;
-}
-
-template<typename T, int N>
-static T deserialize(const std::vector<uint8_t>& data) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
-    std::array<uint8_t, N> raw;
-    for (int i = 0; i < N; ++i) {
-        raw.at(i) = data.at(i);
-    }
-    return std::bit_cast<T>(raw);
-}
-
-//////////////////////////////////////
-// OTOS
-/////////////////
-
 Status getStatus() noexcept {
     constexpr int ID = 1;
 
@@ -157,7 +84,7 @@ Status getStatus() noexcept {
         uint8_t value;
     } s;
 
-    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.empty()) {
         return { 0, 0, 0, 0, 1 };
     } else {
@@ -172,7 +99,7 @@ Status getStatus() noexcept {
 
 int selfTest() noexcept {
     constexpr int ID = 24;
-    const auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.empty()) {
         return PROS_ERR;
     } else {
@@ -182,7 +109,7 @@ int selfTest() noexcept {
 
 int resetTracking() noexcept {
     constexpr int ID = 3;
-    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.empty()) {
         return PROS_ERR;
     } else {
@@ -201,7 +128,7 @@ Pose get_pose() noexcept {
                              std::numeric_limits<float>::infinity() };
 
     // request, recieve
-    auto tmp = write_and_receive(ID, {}, READ_TIMEOUT);
+    auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (tmp.empty()) {
         return ERROR;
     }
@@ -241,7 +168,7 @@ int set_pose(Pose pose) noexcept {
     out[4] = rawH & 0xFF;
     out[5] = (rawH >> 8) & 0xFF;
     // write and get response
-    auto raw = write_and_receive(ID, out, READ_TIMEOUT);
+    auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
     pros::delay(10);
     if (raw.empty()) {
         return PROS_ERR;
@@ -285,7 +212,7 @@ Acceleration get_acceleration() noexcept {
                              std::numeric_limits<float>::infinity() };
 
     // request, recieve
-    auto tmp = write_and_receive(ID, {}, READ_TIMEOUT);
+    auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (tmp.empty()) {
         return ERROR;
     }
@@ -331,7 +258,7 @@ int set_offset(Pose pose) noexcept {
     out[4] = rawH & 0xFF;
     out[5] = (rawH >> 8) & 0xFF;
     // write and get response
-    auto raw = write_and_receive(ID, out, READ_TIMEOUT);
+    auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
     if (raw.empty()) {
         return PROS_ERR;
     } else {
@@ -345,7 +272,7 @@ int set_offset(Pose pose) noexcept {
 
 float get_linear_scalar() noexcept {
     constexpr int ID = 18;
-    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.empty()) {
         return std::numeric_limits<float>::infinity();
     } else {
@@ -357,7 +284,7 @@ int set_linear_scalar(float scalar) noexcept {
     constexpr int ID = 19;
     auto raw = std::bit_cast<uint8_t>(
       static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
-    auto err = write_and_receive(ID, { raw }, READ_TIMEOUT);
+    auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
     if (err.empty()) {
         return PROS_ERR;
     } else {
@@ -378,7 +305,7 @@ int set_linear_scalar(float scalar) noexcept {
 
 float get_angular_scalar() noexcept {
     constexpr int ID = 20;
-    auto raw = write_and_receive(ID, {}, READ_TIMEOUT);
+    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.empty()) {
         return std::numeric_limits<float>::infinity();
     } else {
@@ -390,7 +317,7 @@ int set_angular_scalar(float scalar) noexcept {
     constexpr int ID = 21;
     auto raw = std::bit_cast<uint8_t>(
       static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
-    auto err = write_and_receive(ID, { raw }, READ_TIMEOUT);
+    auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
     if (err.empty()) {
         return PROS_ERR;
     } else {
@@ -411,7 +338,7 @@ int set_angular_scalar(float scalar) noexcept {
 
 int calibrate(uint8_t samples) noexcept {
     constexpr int ID = 25;
-    auto err = write_and_receive(ID, { samples }, READ_TIMEOUT);
+    auto err = copro::write_and_receive(ID, { samples }, READ_TIMEOUT);
     if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) {
         return PROS_ERR;
     }
@@ -420,7 +347,7 @@ int calibrate(uint8_t samples) noexcept {
 
 int isCalibrated() noexcept {
     constexpr int ID = 26;
-    auto err = write_and_receive(ID, {}, READ_TIMEOUT);
+    auto err = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) {
         return PROS_ERR;
     }

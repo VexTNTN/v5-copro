@@ -4,6 +4,49 @@
 #include <vector>
 
 namespace copro {
+
+/**
+ * @brief Serialize a trivially copyable type into a vector of bytes
+ *
+ * @tparam T the datatype
+ *
+ * @param data the data to serialize
+ *
+ * @return std::vector<uint8_t> the serialized data
+ */
+template<typename T>
+static std::vector<uint8_t> serialize(const T& data) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "Type must be trivially copyable");
+    auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
+    std::vector<uint8_t> out(sizeof(T));
+    for (int i = 0; i < sizeof(T); ++i) {
+        out.at(i) = raw.at(i);
+    }
+    return out;
+}
+
+/**
+ * @brief Deserialize a vector of bytes into a type
+ *
+ * @tparam T the datatype
+ * @tparam N the size of the datatype in bytes
+ *
+ * @param data the data to deserialize
+ *
+ * @return T the deserialized data
+ */
+template<typename T, int N>
+static T deserialize(const std::vector<uint8_t>& data) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "Type must be trivially copyable");
+    std::array<uint8_t, N> raw;
+    for (int i = 0; i < N; ++i) {
+        raw.at(i) = data.at(i);
+    }
+    return std::bit_cast<T>(raw);
+}
+
 /**
  * @brief initialize comms with the coprocessor.
  *
@@ -23,6 +66,7 @@ namespace copro {
  * to disable. -1 by default
  */
 int init(int port, int baud, int timeout = -1);
+
 /**
  * @brief Write a vector of bytes of the serial port
  *
@@ -37,6 +81,7 @@ int init(int port, int baud, int timeout = -1);
  * @param message
  */
 void write(const std::vector<uint8_t>& message);
+
 /**
  * @brief Read a packet, parse it, and return the message
  *
@@ -53,4 +98,17 @@ void write(const std::vector<uint8_t>& message);
  * @return std::span<const uint8_t> the payload
  */
 std::vector<uint8_t> read();
+
+/**
+ * @brief Write a message to the coprocessor and wait for a response
+ *
+ * @param id the message ID
+ * @param data the payload data
+ * @param timeout how long to wait for a response, in milliseconds
+ *
+ * @return std::vector<uint8_t> the response payload
+ */
+std::vector<uint8_t> write_and_receive(uint8_t id,
+                                       const std::vector<uint8_t>& data,
+                                       int timeout) noexcept;
 } // namespace copro

@@ -18,9 +18,9 @@ constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
 static int PORT;
 
-static std::vector<uint8_t> write_and_receive(uint8_t id,
-                                              const std::vector<uint8_t>& data,
-                                              int timeout) noexcept {
+std::vector<uint8_t> write_and_receive(uint8_t id,
+                                       const std::vector<uint8_t>& data,
+                                       int timeout) noexcept {
     // prepare data
     std::vector<uint8_t> out;
     out.push_back(id);
