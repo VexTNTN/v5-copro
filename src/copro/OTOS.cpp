@@ -4,8 +4,6 @@
 #include "pros/rtos.hpp"
 #include <cmath>
 #include <iostream>
-#include <mutex>
-#include <system_error>
 
 // getCoprocessorVersion,         // 0 // low prio
 // otos::getStatus,               // 1 // done
@@ -66,8 +64,6 @@ static constexpr float kInt16ToMpss = 1.0f / kMpssToInt16;
 
 static constexpr float kRpssToInt16 = 32768.0f / (M_PI * 1000.0f);
 static constexpr float kInt16ToRpss = 1.0f / kRpssToInt16;
-
-static pros::Mutex mutex;
 
 Status getStatus() noexcept {
     constexpr int ID = 1;
