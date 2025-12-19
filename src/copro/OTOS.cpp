@@ -37,6 +37,8 @@
 // otos::getOffset,               // 27 // impossible until FW bug fixed
 // otos::setOffset                // 28 // done
 
+// TODO: add mutex for copro communication?
+
 namespace otos {
 
 //////////////////////////////////////

@@ -3,6 +3,7 @@
 #include <cstdint>
 
 namespace lidar {
+
 enum class Id {
     Left = 0, // the left port on the board
     Right = 1, // the right port on the board
@@ -11,12 +12,14 @@ enum class Id {
 enum class Quality {
     Good = 1,
     Poor = 0,
+    Error = 2,
 };
 
 enum class Status {
     Good = 0,
     Warning = 1,
     Error = 2,
+    Unknown = 3,
 };
 
 struct Health {
