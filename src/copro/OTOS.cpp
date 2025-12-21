@@ -3,7 +3,6 @@
 #include "pros/error.h"
 #include "pros/rtos.hpp"
 #include <cmath>
-#include <iostream>
 
 // getCoprocessorVersion,         // 0 // low prio
 // otos::getStatus,               // 1 // done
@@ -83,7 +82,7 @@ Status getStatus() noexcept {
     } s;
 
     auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.empty()) {
+    if (raw.size() != 1) {
         return { 0, 0, 0, 0, 1 };
     } else {
         s.value = raw.at(0);
@@ -98,20 +97,20 @@ Status getStatus() noexcept {
 int selfTest() noexcept {
     constexpr int ID = 24;
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.empty()) {
+    if (raw.size() != 1) {
         return PROS_ERR;
     } else {
-        return static_cast<int>(raw.at(0));
+        return 1;
     }
 }
 
 int resetTracking() noexcept {
     constexpr int ID = 3;
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.empty()) {
+    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+    if (raw.size() != 1) {
         return PROS_ERR;
     } else {
-        return static_cast<int>(raw.at(0));
+        return 1;
     }
 }
 
@@ -126,19 +125,8 @@ Pose get_pose() noexcept {
                              std::numeric_limits<float>::infinity() };
 
     // request, recieve
-    auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (tmp.empty()) {
-        return ERROR;
-    }
-
-    // error checking
-    bool err = true;
-    for (uint8_t b : tmp) {
-        if (b != 1) {
-            err = false;
-        }
-    }
-    if (err) {
+    const auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+    if (tmp.size() != 6) {
         return ERROR;
     }
 
@@ -157,46 +145,44 @@ int set_pose(Pose pose) noexcept {
     int16_t rawY = (pose.y * kInchToInt16);
     int16_t rawH = (pose.h * kDegToInt16);
     // init vector
-    std::vector<uint8_t> out(6, 0);
+    std::vector<uint8_t> out(6);
     // serialize
-    out[0] = rawX & 0xFF;
-    out[1] = (rawX >> 8) & 0xFF;
-    out[2] = rawY & 0xFF;
-    out[3] = (rawY >> 8) & 0xFF;
-    out[4] = rawH & 0xFF;
-    out[5] = (rawH >> 8) & 0xFF;
+    out.at(0) = rawX & 0xFF;
+    out.at(1) = (rawX >> 8) & 0xFF;
+    out.at(2) = rawY & 0xFF;
+    out.at(3) = (rawY >> 8) & 0xFF;
+    out.at(4) = rawH & 0xFF;
+    out.at(5) = (rawH >> 8) & 0xFF;
+
     // write and get response
     auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
     pros::delay(10);
-    if (raw.empty()) {
+    if (raw.size() != 1) {
         return PROS_ERR;
-    } else {
-        // check that the pose was actually set
-        auto p = get_pose();
-        // check for error
-        if (p.x == INFINITY) {
-            std::cout << "Fuck" << std::endl;
-            return PROS_ERR;
-        }
-        // check that all the fields are the same
-        printf("p.x: %.2f, pose.x: %.2f\n", p.x, pose.x);
-        if (std::fabs(p.x - pose.x) > 1) {
-            std::cout << "fuck2" << std::endl;
-            return PROS_ERR;
-        }
-
-        if (std::fabs(p.y - pose.y) > 1) {
-            std::cout << "fuck3" << std::endl;
-            return PROS_ERR;
-        }
-
-        if (std::fabs(p.h - pose.h) > 1) {
-            std::cout << "fuck4" << std::endl;
-            return PROS_ERR;
-        }
-        // success
-        return static_cast<int>(raw.at(0));
     }
+
+    // check that the pose was actually set
+    auto p = get_pose();
+    // check for error
+    if (p.x == INFINITY) {
+        return PROS_ERR;
+    }
+
+    // check that all the fields are the same
+    if (std::fabs(p.x - pose.x) > 1) {
+        return PROS_ERR;
+    }
+
+    if (std::fabs(p.y - pose.y) > 1) {
+        return PROS_ERR;
+    }
+
+    if (std::fabs(p.h - pose.h) > 1) {
+        return PROS_ERR;
+    }
+
+    // success
+    return 1;
 }
 
 //////////////////////////////////////
@@ -210,19 +196,8 @@ Acceleration get_acceleration() noexcept {
                              std::numeric_limits<float>::infinity() };
 
     // request, recieve
-    auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (tmp.empty()) {
-        return ERROR;
-    }
-
-    // error checking
-    bool err = true;
-    for (uint8_t b : tmp) {
-        if (b != 1) {
-            err = false;
-        }
-    }
-    if (err) {
+    const auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+    if (tmp.size() != 6) {
         return ERROR;
     }
 
@@ -249,18 +224,19 @@ int set_offset(Pose pose) noexcept {
     // init vector
     std::vector<uint8_t> out(6, 0);
     // serialize
-    out[0] = rawX & 0xFF;
-    out[1] = (rawX >> 8) & 0xFF;
-    out[2] = rawY & 0xFF;
-    out[3] = (rawY >> 8) & 0xFF;
-    out[4] = rawH & 0xFF;
-    out[5] = (rawH >> 8) & 0xFF;
+    out.at(0) = rawX & 0xFF;
+    out.at(1) = (rawX >> 8) & 0xFF;
+    out.at(2) = rawY & 0xFF;
+    out.at(3) = (rawY >> 8) & 0xFF;
+    out.at(4) = rawH & 0xFF;
+    out.at(5) = (rawH >> 8) & 0xFF;
+
     // write and get response
-    auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
-    if (raw.empty()) {
+    const auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
+    if (raw.size() != 1) {
         return PROS_ERR;
     } else {
-        return static_cast<int>(raw.at(0));
+        return 1;
     }
 }
 
@@ -270,31 +246,33 @@ int set_offset(Pose pose) noexcept {
 
 float get_linear_scalar() noexcept {
     constexpr int ID = 18;
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.empty()) {
+    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+
+    if (raw.size() != 1) {
         return std::numeric_limits<float>::infinity();
-    } else {
-        return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
     }
+
+    return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
 }
 
 int set_linear_scalar(float scalar) noexcept {
     constexpr int ID = 19;
-    auto raw = std::bit_cast<uint8_t>(
+
+    const auto raw = std::bit_cast<uint8_t>(
       static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
-    auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
-    if (err.empty()) {
+    const auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
+
+    if (err.size() != 1) {
         return PROS_ERR;
-    } else {
-        // check that the linear scalar was actually set
-        auto s = get_linear_scalar();
-        // check for error
-        if (s == INFINITY) return PROS_ERR;
-        std::cout << "Linear Scaler: " << s << std::endl;
-        // check that the field is the same
-        if (std::abs(s - scalar) > 0.02) return PROS_ERR;
-        return 0;
     }
+
+    // check that the linear scalar was actually set
+    auto s = get_linear_scalar();
+    // check for error
+    if (s == INFINITY) return PROS_ERR;
+    // check that the field is the same
+    if (std::abs(s - scalar) > 0.02) return PROS_ERR;
+    return 1;
 }
 
 //////////////////////////////////////
@@ -303,31 +281,33 @@ int set_linear_scalar(float scalar) noexcept {
 
 float get_angular_scalar() noexcept {
     constexpr int ID = 20;
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.empty()) {
+
+    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+    if (raw.size() != 1) {
         return std::numeric_limits<float>::infinity();
-    } else {
-        return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
     }
+
+    return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
 }
 
 int set_angular_scalar(float scalar) noexcept {
     constexpr int ID = 21;
-    auto raw = std::bit_cast<uint8_t>(
+
+    const auto raw = std::bit_cast<uint8_t>(
       static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
-    auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
-    if (err.empty()) {
+    const auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
+
+    if (err.size() != 1) {
         return PROS_ERR;
-    } else {
-        // check that the angular scalar was actually set
-        auto s = get_angular_scalar();
-        // check for error
-        if (s == INFINITY) return PROS_ERR;
-        std::cout << "Angular Scaler: " << s << std::endl;
-        // check that the field is the same
-        if (std::abs(s - scalar) > 0.02) return PROS_ERR;
-        return 0;
     }
+
+    // check that the angular scalar was actually set
+    auto s = get_angular_scalar();
+    // check for error
+    if (s == INFINITY) return PROS_ERR;
+    // check that the field is the same
+    if (std::abs(s - scalar) > 0.02) return PROS_ERR;
+    return 1;
 }
 
 //////////////////////////////////////
@@ -336,20 +316,25 @@ int set_angular_scalar(float scalar) noexcept {
 
 int calibrate(uint8_t samples) noexcept {
     constexpr int ID = 25;
-    auto err = copro::write_and_receive(ID, { samples }, READ_TIMEOUT);
-    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) {
+
+    const auto err = copro::write_and_receive(ID, { samples }, READ_TIMEOUT);
+    if (err.size() != 1) {
         return PROS_ERR;
     }
-    return err.at(0);
+
+    return 1;
 }
 
 int isCalibrated() noexcept {
     constexpr int ID = 26;
-    auto err = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (err.empty() || (err.at(0) != 0 && err.at(0) != 1)) {
+
+    const auto err = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+
+    if (err.size() != 1) {
         return PROS_ERR;
     }
-    return err.at(0);
+
+    return 1;
 }
 
 } // namespace otos
