@@ -363,7 +363,7 @@ int isCalibrated() noexcept {
         return PROS_ERR;
     }
 
-    return 1;
+    return err.at(0);
 }
 
 } // namespace otos
