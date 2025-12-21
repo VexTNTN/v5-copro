@@ -66,6 +66,41 @@ static constexpr float kInt16ToMpss = 1.0f / kMpssToInt16;
 static constexpr float kRpssToInt16 = 32768.0f / (M_PI * 1000.0f);
 static constexpr float kInt16ToRpss = 1.0f / kRpssToInt16;
 
+// helper function to convert float to int16 with proper clamping and rounding
+inline static std::int16_t to_i16(float v) noexcept {
+    constexpr auto I16_MIN = std::numeric_limits<std::int16_t>::min(); // -32768
+    constexpr auto I16_MAX = std::numeric_limits<std::int16_t>::max(); //  32767
+
+    if (std::isnan(v)) return I16_MAX;
+    if (std::isinf(v)) return std::signbit(v) ? I16_MIN : I16_MAX;
+
+    // Clamp first to avoid any overflow/FE_INVALID issues in rounding routines
+    double d = std::clamp(static_cast<double>(v),
+                          static_cast<double>(I16_MIN),
+                          static_cast<double>(I16_MAX));
+
+    // std::round: half away from zero
+    long long r = static_cast<long long>(std::round(d));
+
+    // After the clamp, r is guaranteed in-range, so this cast is safe
+    return static_cast<std::int16_t>(r);
+}
+
+// helper function to convert float to int8 with proper clamping and rounding
+inline static std::int8_t to_i8(float v) noexcept {
+    constexpr std::int8_t I8_MIN = -128;
+    constexpr std::int8_t I8_MAX = 127;
+
+    if (std::isnan(v)) return I8_MAX;
+    if (std::isinf(v)) return std::signbit(v) ? I8_MIN : I8_MAX;
+
+    // saturate then round (half away from zero)
+    double d =
+      std::clamp(static_cast<double>(v), double(I8_MIN), double(I8_MAX));
+    long long r = static_cast<long long>(std::round(d));
+    return static_cast<std::int8_t>(r);
+}
+
 Status getStatus() noexcept {
     constexpr int ID = 1;
 
@@ -141,9 +176,9 @@ Pose get_pose() noexcept {
 int set_pose(Pose pose) noexcept {
     constexpr int ID = 8;
     // cast
-    int16_t rawX = (pose.x * kInchToInt16);
-    int16_t rawY = (pose.y * kInchToInt16);
-    int16_t rawH = (pose.h * kDegToInt16);
+    int16_t rawX = to_i16(pose.x * kInchToInt16);
+    int16_t rawY = to_i16(pose.y * kInchToInt16);
+    int16_t rawH = to_i16(pose.h * kDegToInt16);
     // init vector
     std::vector<uint8_t> out(6);
     // serialize
@@ -218,9 +253,9 @@ Acceleration get_acceleration() noexcept {
 int set_offset(Pose pose) noexcept {
     constexpr int ID = 28;
     // cast
-    int16_t rawX = (pose.x * kInchToInt16);
-    int16_t rawY = (pose.y * kInchToInt16);
-    int16_t rawH = (pose.h * kDegToInt16);
+    int16_t rawX = to_i16(pose.x * kInchToInt16);
+    int16_t rawY = to_i16(pose.y * kInchToInt16);
+    int16_t rawH = to_i16(pose.h * kDegToInt16);
     // init vector
     std::vector<uint8_t> out(6, 0);
     // serialize
@@ -258,20 +293,16 @@ float get_linear_scalar() noexcept {
 int set_linear_scalar(float scalar) noexcept {
     constexpr int ID = 19;
 
-    const auto raw = std::bit_cast<uint8_t>(
-      static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
+    const float scaled = (scalar - 1.0f) * 1000.0f;
+    const std::int8_t raw_i8 = to_i8(scaled);
+    const std::uint8_t raw = std::bit_cast<std::uint8_t>(raw_i8);
+
     const auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
+    if (err.size() != 1) return PROS_ERR;
 
-    if (err.size() != 1) {
-        return PROS_ERR;
-    }
-
-    // check that the linear scalar was actually set
-    auto s = get_linear_scalar();
-    // check for error
-    if (s == INFINITY) return PROS_ERR;
-    // check that the field is the same
-    if (std::abs(s - scalar) > 0.02) return PROS_ERR;
+    const auto s = get_linear_scalar();
+    if (!std::isfinite(s)) return PROS_ERR; // stronger than s == INFINITY
+    if (std::abs(s - scalar) > 0.02f) return PROS_ERR;
     return 1;
 }
 
@@ -293,20 +324,18 @@ float get_angular_scalar() noexcept {
 int set_angular_scalar(float scalar) noexcept {
     constexpr int ID = 21;
 
-    const auto raw = std::bit_cast<uint8_t>(
-      static_cast<int8_t>((scalar - 1.0f) * 1000 + 0.5f));
-    const auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
+    const float scaled = (scalar - 1.0f) * 1000.0f;
+    const std::int8_t raw_i8 = to_i8(scaled);
+    const std::uint8_t raw = std::bit_cast<std::uint8_t>(raw_i8);
 
-    if (err.size() != 1) {
-        return PROS_ERR;
-    }
+    const auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
+    if (err.size() != 1) return PROS_ERR;
 
     // check that the angular scalar was actually set
-    auto s = get_angular_scalar();
-    // check for error
-    if (s == INFINITY) return PROS_ERR;
-    // check that the field is the same
-    if (std::abs(s - scalar) > 0.02) return PROS_ERR;
+    const auto s = get_angular_scalar();
+    if (!std::isfinite(s)) return PROS_ERR; // catches +inf, -inf, NaN
+    if (std::abs(s - scalar) > 0.02f) return PROS_ERR;
+
     return 1;
 }
 
