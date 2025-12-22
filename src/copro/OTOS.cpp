@@ -43,7 +43,7 @@ namespace otos {
 //////////////////////////////////////
 // constants
 /////////////////
-constexpr int READ_TIMEOUT = 20;
+constexpr int READ_TIMEOUT = 30;
 
 constexpr float kRadianToDegree = 180.0 / 3.14159;
 constexpr float kDegreeToRadian = 3.14159 / 180.0;
@@ -282,7 +282,6 @@ int set_offset(Pose pose) noexcept {
 float get_linear_scalar() noexcept {
     constexpr int ID = 18;
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-
     if (raw.size() != 1) {
         return std::numeric_limits<float>::infinity();
     }
@@ -314,6 +313,7 @@ float get_angular_scalar() noexcept {
     constexpr int ID = 20;
 
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+
     if (raw.size() != 1) {
         return std::numeric_limits<float>::infinity();
     }
@@ -346,7 +346,8 @@ int set_angular_scalar(float scalar) noexcept {
 int calibrate(uint8_t samples) noexcept {
     constexpr int ID = 25;
 
-    const auto err = copro::write_and_receive(ID, { samples }, READ_TIMEOUT);
+    // manually set timeout to 1.5 seconds as calibrate is blocking
+    const auto err = copro::write_and_receive(ID, { samples }, 1500);
     if (err.size() != 1) {
         return PROS_ERR;
     }
