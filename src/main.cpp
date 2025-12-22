@@ -68,10 +68,10 @@ void initialize() {
 
     // print acceleration data along the x axis every second
     while (true) {
-        //auto p = otos::get_pose();
-        //printf("x: %.2f, y: %.2f, h: %.2f\n", p.x, p.y, p.h);
-        auto a = otos::get_acceleration();
-        printf("a: x: %.2f, y: %.2f, h: %.2f\n", a.x, a.y, a.h);
-        pros::delay(10);
+        auto p = otos::get_pose();
+        printf("x: %.2f, y: %.2f, h: %.2f\n", p.x, p.y, p.h);
+        //auto a = otos::get_acceleration();
+        //printf("a: x: %6.2f, y: %6.2f, h: %6.2f\n", a.x, a.y, a.h);
+        pros::delay(50);
     }
 }
