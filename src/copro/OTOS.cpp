@@ -66,8 +66,13 @@ static constexpr float kInt16ToMpss = 1.0f / kMpssToInt16;
 static constexpr float kRpssToInt16 = 32768.0f / (M_PI * 1000.0f);
 static constexpr float kInt16ToRpss = 1.0f / kRpssToInt16;
 
+enum class CoproStatus : std::uint8_t {
+    Ok = 0,
+    IoError = 2,
+};
+
 // helper function to convert float to int16 with proper clamping and rounding
-inline static std::int16_t to_i16(float v) noexcept {
+static constexpr std::int16_t to_i16(float v) noexcept {
     constexpr auto I16_MIN = std::numeric_limits<std::int16_t>::min(); // -32768
     constexpr auto I16_MAX = std::numeric_limits<std::int16_t>::max(); //  32767
 
@@ -87,7 +92,7 @@ inline static std::int16_t to_i16(float v) noexcept {
 }
 
 // helper function to convert float to int8 with proper clamping and rounding
-inline static std::int8_t to_i8(float v) noexcept {
+static constexpr std::int8_t to_i8(float v) noexcept {
     constexpr std::int8_t I8_MIN = -128;
     constexpr std::int8_t I8_MAX = 127;
 
@@ -101,7 +106,27 @@ inline static std::int8_t to_i8(float v) noexcept {
     return static_cast<std::int8_t>(r);
 }
 
-Status getStatus() noexcept {
+std::optional<OtosError> validate_message(const std::vector<uint8_t>& message,
+                                          std::size_t expected_length) {
+    // check that the message isn't empty
+    if (message.empty()) {
+        return OtosError { .type = OtosError::Type::EmptyResponse,
+                           .what = "Empty response from coprocessor",
+                           .where = { std::source_location::current() } };
+    }
+    // check that the size of the message is what we expect
+    if (message.size() != expected_length) {
+        return OtosError { .type = OtosError::Type::WrongMessageLength,
+                           .what = std::format(
+                             "Invalid response length! Expected {} but has {}",
+                             expected_length,
+                             message.size()),
+                           .where = { std::source_location::current() } };
+    }
+    // check the
+}
+
+std::expected<Status, OtosError> get_status() noexcept {
     constexpr int ID = 1;
 
     union {
@@ -116,20 +141,21 @@ Status getStatus() noexcept {
         uint8_t value;
     } s;
 
-    auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.size() != 1) {
-        return { 0, 0, 0, 0, 1 };
+    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+
+    if (!check_status_byte(raw)) {
+        return Status { 0, 0, 0, 0 };
     } else {
         s.value = raw.at(0);
-        return { static_cast<bool>(s.warn_tilt_angle),
-                 static_cast<bool>(s.warn_optical_tracking),
-                 static_cast<bool>(s.optical_fatal),
-                 static_cast<bool>(s.imu_fatal),
-                 0 };
+        return OtosError { static_cast<bool>(s.warn_tilt_angle),
+                           static_cast<bool>(s.warn_optical_tracking),
+                           static_cast<bool>(s.optical_fatal),
+                           static_cast<bool>(s.imu_fatal),
+                           0 };
     }
 }
 
-int selfTest() noexcept {
+std::expected<bool, OtosError> self_test() noexcept {
     constexpr int ID = 24;
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.size() != 1) {
@@ -139,7 +165,7 @@ int selfTest() noexcept {
     }
 }
 
-int resetTracking() noexcept {
+std::expected<void, OtosError> reset_tracking() noexcept {
     constexpr int ID = 3;
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.size() != 1) {
@@ -153,7 +179,7 @@ int resetTracking() noexcept {
 // pose
 /////////////////
 
-Pose get_pose() noexcept {
+std::expected<Pose, OtosError> get_pose() noexcept {
     constexpr int ID = 7;
     constexpr Pose ERROR = { std::numeric_limits<float>::infinity(),
                              std::numeric_limits<float>::infinity(),
@@ -173,7 +199,7 @@ Pose get_pose() noexcept {
     return { rawX * kInt16ToInch, rawY * kInt16ToInch, rawH * kInt16ToDeg };
 }
 
-int set_pose(Pose pose) noexcept {
+std::expected<void, OtosError> set_pose(Pose pose) noexcept {
     constexpr int ID = 8;
     // cast
     int16_t rawX = to_i16(pose.x * kInchToInt16);
@@ -224,7 +250,7 @@ int set_pose(Pose pose) noexcept {
 // acceleration
 /////////////////
 
-Acceleration get_acceleration() noexcept {
+std::expected<Acceleration, OtosError> get_acceleration() noexcept {
     constexpr int ID = 12;
     constexpr Pose ERROR = { std::numeric_limits<float>::infinity(),
                              std::numeric_limits<float>::infinity(),
@@ -250,7 +276,7 @@ Acceleration get_acceleration() noexcept {
 // offset
 /////////////////
 
-int set_offset(Pose pose) noexcept {
+std::expected<void, OtosError> set_offset(Pose pose) noexcept {
     constexpr int ID = 28;
     // cast
     int16_t rawX = to_i16(pose.x * kInchToInt16);
@@ -279,7 +305,7 @@ int set_offset(Pose pose) noexcept {
 // linear scalar
 /////////////////
 
-float get_linear_scalar() noexcept {
+std::expected<float, OtosError> get_linear_scalar() noexcept {
     constexpr int ID = 18;
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
     if (raw.size() != 1) {
@@ -289,7 +315,7 @@ float get_linear_scalar() noexcept {
     return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
 }
 
-int set_linear_scalar(float scalar) noexcept {
+std::expected<void, OtosError> set_linear_scalar(float scalar) noexcept {
     constexpr int ID = 19;
 
     const float scaled = (scalar - 1.0f) * 1000.0f;
@@ -309,7 +335,7 @@ int set_linear_scalar(float scalar) noexcept {
 // angular scalar
 /////////////////
 
-float get_angular_scalar() noexcept {
+std::expected<float, OtosError> get_angular_scalar() noexcept {
     constexpr int ID = 20;
 
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
@@ -321,7 +347,7 @@ float get_angular_scalar() noexcept {
     return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
 }
 
-int set_angular_scalar(float scalar) noexcept {
+std::expected<void, OtosError> set_angular_scalar(float scalar) noexcept {
     constexpr int ID = 21;
 
     const float scaled = (scalar - 1.0f) * 1000.0f;
@@ -343,7 +369,7 @@ int set_angular_scalar(float scalar) noexcept {
 // calibrate
 /////////////////
 
-int calibrate(uint8_t samples) noexcept {
+std::expected<void, OtosError> calibrate(uint8_t samples) noexcept {
     constexpr int ID = 25;
 
     // manually set timeout to 1.5 seconds as calibrate is blocking
@@ -355,7 +381,7 @@ int calibrate(uint8_t samples) noexcept {
     return 1;
 }
 
-int isCalibrated() noexcept {
+std::expected<bool, OtosError> is_calibrated() noexcept {
     constexpr int ID = 26;
 
     const auto err = copro::write_and_receive(ID, {}, READ_TIMEOUT);
