@@ -5,10 +5,9 @@
 #include "pros/serial.h"
 #include <cerrno>
 #include <limits>
+#include <mutex>
 #include <system_error>
 #include <type_traits>
-
-// this is hell, thanks WG21
 
 namespace copro {
 
@@ -16,11 +15,14 @@ namespace copro {
 constexpr uint8_t DELIMITER_1 = 0xAA;
 constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
+
+static pros::RecursiveMutex io_mutex;
 static int PORT;
 
 std::vector<uint8_t> write_and_receive(uint8_t id,
                                        const std::vector<uint8_t>& data,
                                        int timeout) noexcept {
+    std::lock_guard lock(io_mutex);
     // prepare data
     std::vector<uint8_t> out;
     out.push_back(id);
@@ -193,6 +195,8 @@ static void vector_append(std::vector<uint8_t>& v, const T& data) {
 // protocol:
 // [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
 void write(const std::vector<uint8_t>& message) {
+    std::lock_guard lock(io_mutex);
+
     // stuff the message
     std::vector<uint8_t> payload;
     for (uint8_t b : message) {
@@ -234,6 +238,8 @@ void write(const std::vector<uint8_t>& message) {
 }
 
 static uint8_t peek_byte() {
+    std::lock_guard lock(io_mutex);
+
     int32_t raw = pros::c::serial_peek_byte(PORT);
     // Handle timeout scenario with single retry
     if (raw == -1) {
@@ -256,6 +262,8 @@ static uint8_t peek_byte() {
 }
 
 static uint8_t read_byte() {
+    std::lock_guard lock(io_mutex);
+
     int32_t raw = pros::c::serial_read_byte(PORT);
     // Handle timeout scenario with single retry
     if (raw == -1) {
@@ -279,6 +287,8 @@ static uint8_t read_byte() {
 
 template<typename T>
 static T read_stream() {
+    std::lock_guard lock(io_mutex);
+
     static_assert(std::is_trivially_copyable_v<T>,
                   "Type must be trivially copyable");
     std::array<uint8_t, sizeof(T)> raw;
@@ -291,6 +301,8 @@ static T read_stream() {
 // protocol:
 // [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed payload]
 std::vector<uint8_t> read() {
+    std::lock_guard lock(io_mutex);
+
     // check if there's data available
     const int avail = pros::c::serial_get_read_avail(PORT);
     if (avail == 0) {
