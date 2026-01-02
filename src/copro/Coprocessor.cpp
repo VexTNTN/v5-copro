@@ -12,7 +12,7 @@ namespace { // Internal linkage
 constexpr uint8_t DELIMITER_1 = 0xAA;
 constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
-static int s_port; // Renamed to denote static
+static int s_port;
 
 // --- Error Handling Helpers ---
 
@@ -166,48 +166,20 @@ std::expected<T, CoproError> read_pod() {
     return std::bit_cast<T>(raw);
 }
 
-} // anonymous namespace
-
-// --- Public Implementation ---
-
-std::expected<void, CoproError> init(int port, int baud) noexcept {
-    s_port = port;
-
-    TRY(check_pros(pros::c::serial_enable(s_port)));
-    pros::delay(50);
-
-    TRY(check_pros(pros::c::serial_set_baudrate(s_port, baud)));
-    pros::delay(50);
-
-    TRY(check_pros(pros::c::serial_flush(s_port)));
-    pros::delay(10);
-
-    // Ping until response
-    while (true) {
-        auto rtn = write_and_receive(MessageId::Ping, {}, 10);
-        if (rtn) break;
-
-        // Only retry on specific communication errors
-        auto type = rtn.error().type;
-        bool can_retry = (type == CoproError::Type::TimedOut ||
-                          type == CoproError::Type::NoData ||
-                          type == CoproError::Type::CorruptedRead ||
-                          type == CoproError::Type::DataCutOff);
-
-        if (!can_retry) {
-            return std::unexpected(
-              trace_error(rtn.error(), std::source_location::current()));
-        }
-    }
-
-    return {};
-}
-
+/**
+ * @brief Write a vector of bytes of the serial port
+ *
+ * @param message vector of bytes to write
+ *
+ * @return void on success
+ * @return CoproError on failure
+ */
+[[nodiscard]]
 std::expected<void, CoproError>
 write(const std::vector<uint8_t>& message) noexcept {
     // 1. Stuff Payload
     std::vector<uint8_t> payload;
-    payload.reserve(message.size() + 8); // Heuristic reservation
+    payload.reserve(message.size());
 
     for (uint8_t b : message) {
         if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) {
@@ -245,6 +217,18 @@ write(const std::vector<uint8_t>& message) noexcept {
     return {};
 }
 
+/**
+ * @brief initialize comms with the coprocessor.
+ *
+ * @warning this function is blocking
+ *
+ * @param port the port the coprocessor is on
+ * @param baud the baud rate of the serial port. Usually 921600
+ * @param timeout max time that can be taken to initialize
+ *
+ * @return void on success
+ * @return CoproError on failure
+ */
 std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
     int avail = pros::c::serial_get_read_avail(s_port);
     if (avail == PROS_ERR) return std::unexpected(make_errno_error());
@@ -319,6 +303,43 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
     return data;
 }
 
+} // anonymous namespace
+
+// --- Public Implementation ---
+
+std::expected<void, CoproError> init(int port, int baud) noexcept {
+    s_port = port;
+
+    TRY(check_pros(pros::c::serial_enable(s_port)));
+    pros::delay(50);
+
+    TRY(check_pros(pros::c::serial_set_baudrate(s_port, baud)));
+    pros::delay(50);
+
+    TRY(check_pros(pros::c::serial_flush(s_port)));
+    pros::delay(10);
+
+    // Ping until response
+    while (true) {
+        auto rtn = write_and_receive(MessageId::Ping, {}, 10);
+        if (rtn) break;
+
+        // Only retry on specific communication errors
+        auto type = rtn.error().type;
+        bool can_retry = (type == CoproError::Type::TimedOut ||
+                          type == CoproError::Type::NoData ||
+                          type == CoproError::Type::CorruptedRead ||
+                          type == CoproError::Type::DataCutOff);
+
+        if (!can_retry) {
+            return std::unexpected(
+              trace_error(rtn.error(), std::source_location::current()));
+        }
+    }
+
+    return {};
+}
+
 std::expected<std::vector<uint8_t>, CoproError>
 write_and_receive(MessageId id,
                   const std::vector<uint8_t>& data,
@@ -332,14 +353,15 @@ write_and_receive(MessageId id,
 
     TRY(write(packet));
 
+    // only try reading while the timeout hasn't been exceeded
     const int start = pros::millis();
     while (pros::millis() < start + timeout) {
         auto raw = read();
         if (raw.has_value()) {
-            // Strip the ID (first byte) from the response
             if (raw->empty())
                 return {}; // Should not happen based on protocol, but safety
                            // first
+            // Strip the ID (first byte) from the response
             return std::vector<uint8_t>(raw->begin() + 1, raw->end());
         }
 
