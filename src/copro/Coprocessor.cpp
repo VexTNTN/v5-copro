@@ -128,14 +128,12 @@ std::expected<uint8_t, CoproError> serial_byte_op(bool peek) {
         if (raw == PROS_ERR) return std::unexpected(make_errno_error());
         if (raw != -1) return static_cast<uint8_t>(raw);
 
+        // wait for new data
         pros::delay(1);
     }
 
-    pros::c::serial_flush(s_port);
-    auto errType =
-      peek ? CoproError::Type::DataCutOff : CoproError::Type::TimedOut;
     return std::unexpected(
-      CoproError { .type = errType,
+      CoproError { .type = CoproError::Type::DataCutOff,
                    .what = "Serial stream stopped (Timeout/Cutoff)",
                    .where = { std::source_location::current() } });
 }
