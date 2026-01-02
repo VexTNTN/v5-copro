@@ -134,7 +134,7 @@ std::expected<uint8_t, CoproError> serial_byte_op(bool peek) {
 
     return std::unexpected(
       CoproError { .type = CoproError::Type::DataCutOff,
-                   .what = "Serial stream stopped (Timeout/Cutoff)",
+                   .what = "Serial stream cut off. Disconnection?",
                    .where = { std::source_location::current() } });
 }
 
