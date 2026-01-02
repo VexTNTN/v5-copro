@@ -16,6 +16,11 @@ static int s_port;
 
 // --- Error Handling Helpers ---
 
+// no device, serial not initialized: ENODEV
+// copro, not initialized: ENODEV
+// motor, not initialized: EADDRINUSE
+// motor, initialized, EADDRINUSE
+
 // Helper to convert errno/PROS errors to CoproError
 CoproError
 make_errno_error(std::source_location loc = std::source_location::current()) {
@@ -35,6 +40,13 @@ make_errno_error(std::source_location loc = std::source_location::current()) {
             type = CoproError::Type::BrainIoError;
             what = "Vex SDK Brain IO Error";
             break;
+        case ENODEV:
+            type = CoproError::Type::NoDevice;
+            what = "Port not initialized as pros generic serial";
+            break;
+        case EADDRINUSE:
+            type = CoproError::Type::InvalidPort;
+            what = "Invalid port! Non-V5 device present";
         default: type = CoproError::Type::Unknown; what = "Unknown error";
     }
     return CoproError { type, std::move(what), { loc } };
@@ -307,7 +319,7 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
 
 // --- Public Implementation ---
 
-std::expected<void, CoproError> init(int port, int baud) noexcept {
+std::expected<void, CoproError> Coprocessor::init(int port, int baud) noexcept {
     s_port = port;
 
     TRY(check_pros(pros::c::serial_enable(s_port)));
@@ -341,9 +353,9 @@ std::expected<void, CoproError> init(int port, int baud) noexcept {
 }
 
 std::expected<std::vector<uint8_t>, CoproError>
-write_and_receive(MessageId id,
-                  const std::vector<uint8_t>& data,
-                  int timeout) noexcept {
+Coprocessor::write_and_receive(MessageId id,
+                               const std::vector<uint8_t>& data,
+                               int timeout) noexcept {
 
     // Prepare packet: [ID] [DATA...]
     std::vector<uint8_t> packet;

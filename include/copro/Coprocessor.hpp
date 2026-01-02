@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <source_location>
@@ -8,40 +9,6 @@
 #include <vector>
 
 namespace copro {
-
-enum class MessageId : uint8_t {
-    Ping = 0,
-    GetOtosStatus = 1,
-    OtosSelfTest = 24,
-    OtosResetTracking = 3,
-    OtosGetPose = 7,
-    OtosSetPose = 8,
-    OtosGetAccel = 12,
-    OtosSetOffset = 28,
-    OtosGetLinearScalar = 18,
-    OtosSetLinearScalar = 19,
-    OtosGetAngularScalar = 20,
-    OtosSetAngularScalar = 21,
-    OtosCalibrate = 25,
-    OtosIsCalibrated = 26
-};
-
-struct CoproError {
-    enum class Type {
-        Unknown,
-        InvalidPort,
-        MultipleAccess,
-        TimedOut,
-        MessageTooBig,
-        BrainIoError,
-        NoData,
-        CorruptedRead,
-        DataCutOff,
-    } type;
-
-    std::string what;
-    std::vector<std::source_location> where;
-};
 
 /**
  * @brief Serialize a trivially copyable type into a vector of bytes
@@ -80,19 +47,100 @@ static T deserialize(const std::vector<uint8_t>& data) {
     return std::bit_cast<T>(raw);
 }
 
-/**
- * @brief Write a message to the coprocessor and wait for a response
- *
- * @param id the message ID
- * @param data the payload data
- * @param timeout how long to wait for a response, in milliseconds
- *
- * @return std::vector<uint8_t> the response payload on success
- * @return std::vector<uint8_t> CoproError on failure
- */
-[[nodiscard]]
-std::expected<std::vector<uint8_t>, CoproError>
-write_and_receive(MessageId id,
-                  const std::vector<uint8_t>& data,
-                  int timeout) noexcept;
+enum class MessageId : uint8_t {
+    Ping = 0,
+    GetOtosStatus = 1,
+    OtosSelfTest = 24,
+    OtosResetTracking = 3,
+    OtosGetPose = 7,
+    OtosSetPose = 8,
+    OtosGetAccel = 12,
+    OtosSetOffset = 28,
+    OtosGetLinearScalar = 18,
+    OtosSetLinearScalar = 19,
+    OtosGetAngularScalar = 20,
+    OtosSetAngularScalar = 21,
+    OtosCalibrate = 25,
+    OtosIsCalibrated = 26
+};
+
+struct CoproError {
+    enum class Type {
+        Unknown,
+        InvalidPort,
+        NoDevice,
+        MultipleAccess,
+        TimedOut,
+        MessageTooBig,
+        BrainIoError,
+        NoData,
+        CorruptedRead,
+        DataCutOff,
+        InvalidBaud,
+    } type;
+
+    std::string what;
+    std::vector<std::source_location> where;
+};
+
+class Coprocessor {
+  public:
+    /**
+     * @brief Create a Coprocessor instance on a port with a specific baud rate.
+     * Non-blocking.
+     *
+     * @note baud rate must be 9600, 19200, 38400, 57600, 115200, 230400,
+     * 460800, or 921600
+     *
+     * @param port the smart port the Coprocessor is on
+     * @param baud the baud rate the serial stream should run on
+     */
+    constexpr Coprocessor(uint8_t port, uint32_t baud) noexcept
+        : port(port),
+          baud(baud) {};
+
+    /**
+     * @brief initialize the coprocessor
+     *
+     * This function configures a smart port to be a generic serial port,
+     * and performs a simple handshake with the coprocessor. It blocks
+     * until the handshake is complete
+     *
+     * @param port
+     * @param baud
+     * @return std::expected<void, CoproError>
+     */
+    [[nodiscard]]
+    std::expected<void, CoproError> init(int port, int baud) noexcept;
+
+    [[nodiscard]]
+    bool is_initialized() noexcept;
+
+    /**
+     * @brief Write a message to the coprocessor and wait for a response
+     *
+     * @param id the message ID
+     * @param data the payload data
+     * @param timeout how long to wait for a response, in milliseconds
+     *
+     * @return std::vector<uint8_t> the response payload on success
+     * @return CoproError on failure
+     */
+    [[nodiscard]]
+    std::expected<std::vector<uint8_t>, CoproError>
+    write_and_receive(MessageId id,
+                      const std::vector<uint8_t>& data,
+                      int timeout) noexcept;
+
+    constexpr ~Coprocessor() = delete ("Should never need to be destroyed");
+    constexpr Coprocessor(Coprocessor&) =
+      delete ("should never need to be copied");
+    constexpr Coprocessor(const Coprocessor&) =
+      delete ("should never beed to be copied");
+
+  private:
+    std::atomic<bool> initialized;
+    uint8_t port;
+    const uint32_t baud;
+};
 } // namespace copro
