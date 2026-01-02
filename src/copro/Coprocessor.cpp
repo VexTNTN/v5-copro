@@ -258,7 +258,12 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
     // 1. Sync to delimiters
     while (true) {
         if (TRY(read_byte()) == DELIMITER_1) {
-            if (TRY(read_byte()) == DELIMITER_2) break;
+            // We use peek here so we don't consume the second byte if it's
+            // WRONG (Preserves it for the next loop iteration)
+            if (TRY(peek_byte()) == DELIMITER_2) {
+                TRY(read_byte()); // Consume the valid DELIMITER_2
+                break;
+            }
         }
     }
 
@@ -266,39 +271,44 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
     uint16_t length = TRY(read_pod<uint16_t>());
     uint16_t expected_crc = TRY(read_pod<uint16_t>());
 
-    // 3. Read Raw Stuffed Payload
-    // The length on wire is the *stuffed* length
-    std::vector<uint8_t> raw_payload = TRY(read_exact(length));
-
-    // 4. Unstuff
+    // 3. Read Payload
+    // We loop exactly 'length' times (wire bytes), but strictly PEEK first.
     std::vector<uint8_t> data;
-    data.reserve(length); // Will be <= raw length
+    data.reserve(length);
 
-    for (size_t i = 0; i < raw_payload.size(); ++i) {
-        uint8_t b = raw_payload[i];
+    for (int i = 0; i < length; ++i) {
+        // PEEK FIRST: If we see a delimiter here, the Length header was likely
+        // corrupted (too big). Abort immediately to save the delimiter for the
+        // next packet.
+        uint8_t b = TRY(peek_byte());
 
-        // Sanity check: Inner delimiters shouldn't exist unless escaped
         if (b == DELIMITER_1 || b == DELIMITER_2) {
             return std::unexpected(
               CoproError { CoproError::Type::CorruptedRead,
-                           "Unescaped delimiter found",
+                           "Unescaped delimiter found (Sync Lost)",
                            { std::source_location::current() } });
         }
 
+        // Safe to consume
+        TRY(read_byte());
+
         if (b == ESCAPE) {
-            if (++i >= raw_payload.size()) {
+            // Ensure the escaped byte counts towards our wire length limit
+            if (++i >= length) {
                 return std::unexpected(
                   CoproError { CoproError::Type::CorruptedRead,
                                "Trailing escape byte",
                                { std::source_location::current() } });
             }
-            data.push_back(raw_payload[i]);
+            // Read the real data (no need to peek, escape guarantees next is
+            // data)
+            data.push_back(TRY(read_byte()));
         } else {
             data.push_back(b);
         }
     }
 
-    // 5. Verify CRC
+    // 4. Verify CRC
     if (crc16(data) != expected_crc) {
         return std::unexpected(
           CoproError { CoproError::Type::CorruptedRead,
