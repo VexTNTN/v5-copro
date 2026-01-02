@@ -31,7 +31,6 @@ struct CoproError {
         Unknown,
         InvalidPort,
         MultipleAccess,
-        OpcontrolStarted,
         TimedOut,
         MessageTooBig,
         BrainIoError,

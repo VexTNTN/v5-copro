@@ -334,7 +334,7 @@ write_and_receive(MessageId id,
         }
 
         if (raw.error().type == CoproError::Type::NoData) {
-            pros::delay(2); // Yield slightly to prevent tight loop burning CPU
+            pros::delay(1); // Yield to prevent tight loop burning CPU
             continue;
         }
 
