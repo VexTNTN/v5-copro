@@ -1,9 +1,48 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <expected>
+#include <source_location>
+#include <string>
 #include <vector>
 
 namespace copro {
+
+enum class MessageId : uint8_t {
+    Ping = 0,
+    GetOtosStatus = 1,
+    OtosSelfTest = 24,
+    OtosResetTracking = 3,
+    OtosGetPose = 7,
+    OtosSetPose = 8,
+    OtosGetAccel = 12,
+    OtosSetOffset = 28,
+    OtosGetLinearScalar = 18,
+    OtosSetLinearScalar = 19,
+    OtosGetAngularScalar = 20,
+    OtosSetAngularScalar = 21,
+    OtosCalibrate = 25,
+    OtosIsCalibrated = 26
+};
+
+struct CoproError {
+    enum class Type {
+        Unknown,
+        InvalidPort,
+        MultipleAccess,
+        OpcontrolStarted,
+        TimedOut,
+        MessageTooBig,
+        BrainIoError,
+        NoData,
+        CorruptedRead,
+        DataCutOff,
+    } type;
+
+    std::string what;
+    std::vector<std::source_location> where;
+};
 
 /**
  * @brief Serialize a trivially copyable type into a vector of bytes
@@ -15,15 +54,10 @@ namespace copro {
  * @return std::vector<uint8_t> the serialized data
  */
 template<typename T>
+    requires std::is_trivially_copyable_v<T>
 static std::vector<uint8_t> serialize(const T& data) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
     auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
-    std::vector<uint8_t> out(sizeof(T));
-    for (int i = 0; i < sizeof(T); ++i) {
-        out.at(i) = raw.at(i);
-    }
-    return out;
+    return { raw.begin(), raw.end() };
 }
 
 /**
@@ -36,68 +70,52 @@ static std::vector<uint8_t> serialize(const T& data) {
  *
  * @return T the deserialized data
  */
-template<typename T, int N>
+template<typename T>
+    requires std::is_trivially_copyable_v<T>
 static T deserialize(const std::vector<uint8_t>& data) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
-    std::array<uint8_t, N> raw;
-    for (int i = 0; i < N; ++i) {
-        raw.at(i) = data.at(i);
-    }
+    // Ensure we don't read out of bounds (basic safety check)
+    if (data.size() < sizeof(T)) return T {};
+
+    std::array<uint8_t, sizeof(T)> raw;
+    std::copy_n(data.begin(), sizeof(T), raw.begin());
     return std::bit_cast<T>(raw);
 }
 
 /**
  * @brief initialize comms with the coprocessor.
  *
- * This function will block until the coprocessor responds to a ping.
- * However, if driver control starts at any point, this function will
- * exit with an error
- *
- * the function may set the following values of errno:
- * EINVAL: the port is not in a valid range [1-21]
- * EACCESS: another resource is currently trying to access the port
- * EINTR: driver control started while initializing
- * ETIMEDOUT: could not communicate with pi before timeout ended
+ * @warning this function is blocking
  *
  * @param port the port the coprocessor is on
  * @param baud the baud rate of the serial port. Usually 921600
- * @param timeout max time that can be taken to initialize, in milliseconds. -1
- * to disable. -1 by default
+ * @param timeout max time that can be taken to initialize
+ *
+ * @return void on success
+ * @return CoproError on failure
  */
-int init(int port, int baud, int timeout = -1);
+[[nodiscard]]
+std::expected<void, CoproError> init(int _port, int baud) noexcept;
 
 /**
  * @brief Write a vector of bytes of the serial port
  *
- * This function may throw an std::system_error exception,
- * with one of the following error codes
+ * @param message vector of bytes to write
  *
- * EOVERFLOW - the message is too large to send
- * EINVAL - The given value is not within the range of V5 ports (1-21).
- * EACCES - Another resource is currently trying to access the port.
- * EIO - "Serious" internal write error.
- *
- * @param message
+ * @return void on success
+ * @return CoproError on failure
  */
-void write(const std::vector<uint8_t>& message);
+[[nodiscard]]
+std::expected<void, CoproError>
+write(const std::vector<uint8_t>& message) noexcept;
 
 /**
  * @brief Read a packet, parse it, and return the message
  *
- * This function may throw an std::system_error exception,
- * with one of the following error codes:
- *
- * EINVAL - The given value is not within the range of V5 ports (1-21).
- * EACCES - Another resource is currently trying to access the port.
- * ENODATA - There's no data to read.
- * EBADMSG - data corrupted, CRC check failed
- * EPROTO - corrupted escape character, or dropped byte.
- * ENOLINK - Transmission stopped abruptly.
- *
- * @return std::span<const uint8_t> the payload
+ * @return the payload on success
+ * @return CoproError on failure
  */
-std::vector<uint8_t> read();
+[[nodiscard]]
+std::expected<std::vector<uint8_t>, CoproError> read() noexcept;
 
 /**
  * @brief Write a message to the coprocessor and wait for a response
@@ -106,9 +124,12 @@ std::vector<uint8_t> read();
  * @param data the payload data
  * @param timeout how long to wait for a response, in milliseconds
  *
- * @return std::vector<uint8_t> the response payload
+ * @return std::vector<uint8_t> the response payload on success
+ * @return std::vector<uint8_t> CoproError on failure
  */
-std::vector<uint8_t> write_and_receive(uint8_t id,
-                                       const std::vector<uint8_t>& data,
-                                       int timeout) noexcept;
+[[nodiscard]]
+std::expected<std::vector<uint8_t>, CoproError>
+write_and_receive(MessageId id,
+                  const std::vector<uint8_t>& data,
+                  int timeout) noexcept;
 } // namespace copro
