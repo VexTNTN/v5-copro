@@ -3,28 +3,74 @@
 #include "pros/rtos.hpp"
 #include "pros/serial.h"
 #include <cerrno>
-#include <limits>
-#include <source_location>
-#include <type_traits>
-#include <vector>
+#include <format>
 
 namespace copro {
 
-// globals
+namespace { // Internal linkage
+
 constexpr uint8_t DELIMITER_1 = 0xAA;
 constexpr uint8_t DELIMITER_2 = 0x55;
 constexpr uint8_t ESCAPE = 0xBB;
-static int PORT;
+static int s_port; // Renamed to denote static
 
-/**
- * @brief calculate a CRC16 using CCITT-FALSE
- *
- * @param data the data to generate a crc16 for
- * @return uint16_t the crc16
- */
-static uint16_t crc16(const std::vector<uint8_t>& data) {
-    // lookup table for extra zoom
-    // (copy/paste was easier than implementing the algorithm)
+// --- Error Handling Helpers ---
+
+// Helper to convert errno/PROS errors to CoproError
+CoproError
+make_errno_error(std::source_location loc = std::source_location::current()) {
+    CoproError::Type type;
+    std::string what;
+
+    switch (errno) {
+        case EINVAL:
+            type = CoproError::Type::InvalidPort;
+            what = std::format("Invalid Port! Found {}", s_port);
+            break;
+        case EACCES:
+            type = CoproError::Type::MultipleAccess;
+            what = "Port access conflict";
+            break;
+        case EIO:
+            type = CoproError::Type::BrainIoError;
+            what = "Vex SDK Brain IO Error";
+            break;
+        default: type = CoproError::Type::Unknown; what = "Unknown error";
+    }
+    return CoproError { type, std::move(what), { loc } };
+}
+
+// Helper to append source location to an existing error
+CoproError trace_error(CoproError err, std::source_location loc) {
+    err.where.push_back(loc);
+    return err;
+}
+
+// Helper to conditionally move the value only if it isn't void
+template<typename T, typename E>
+constexpr auto unwrap(std::expected<T, E>& expected) {
+    if constexpr (std::is_void_v<T>) {
+        return; // Do nothing for void
+    } else {
+        return std::move(*expected); // Move the value for non-void
+    }
+}
+
+// MACRO: Unwraps std::expected. If error, returns unexpected.
+// Now uses 'unwrap' to safely handle void types.
+#define TRY(expr)                                            \
+    ({                                                       \
+        auto _res = (expr);                                  \
+        if (!_res.has_value()) {                             \
+            return std::unexpected(                          \
+              trace_error(std::move(_res.error()),           \
+                          std::source_location::current())); \
+        }                                                    \
+        unwrap(_res);                                        \
+    })
+
+// --- CRC16 ---
+uint16_t crc16(const std::vector<uint8_t>& data) {
     constexpr std::array<uint16_t, 256> table = {
         0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7, 0x8108,
         0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF, 0x1231, 0x0210,
@@ -56,7 +102,6 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
         0xDF7C, 0xAF9B, 0xBFBA, 0x8FD9, 0x9FF8, 0x6E17, 0x7E36, 0x4E55, 0x5E74,
         0x2E93, 0x3EB2, 0x0ED1, 0x1EF0
     };
-
     uint16_t crc = 0xFFFF;
     for (uint8_t byte : data) {
         crc = (crc << 8) ^ table[((crc >> 8) ^ byte) & 0xFF];
@@ -64,148 +109,108 @@ static uint16_t crc16(const std::vector<uint8_t>& data) {
     return crc;
 }
 
-/**
- * @brief serialize an instance of a trivially-copyable datatype,
- * and add it to a vector
- *
- * @tparam T the datatype
- * @param v the vector to add to
- * @param data the data to serialize
- */
-template<typename T>
-static void vector_append(std::vector<uint8_t>& v, const T& data) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
-    const auto raw = std::bit_cast<std::array<const uint8_t, sizeof(T)>>(data);
-    for (uint8_t b : raw) {
-        v.push_back(b);
+// --- Serial Primitives ---
+
+// Checks if a PROS API call returned error, if so, returns unexpected
+std::expected<void, CoproError> check_pros(int result) {
+    if (result == PROS_ERR) {
+        return std::unexpected(make_errno_error());
     }
+    return {};
 }
 
-std::expected<std::vector<uint8_t>, CoproError>
-write_and_receive(MessageId id,
-                  const std::vector<uint8_t>& data,
-                  int timeout) noexcept {
-    // prepare data
+// Consolidated logic for read/peek
+std::expected<uint8_t, CoproError> serial_byte_op(bool peek) {
+    for (int i = 0; i < 2; i++) {
+        int raw = peek ? pros::c::serial_peek_byte(s_port) :
+                         pros::c::serial_read_byte(s_port);
+
+        if (raw == PROS_ERR) return std::unexpected(make_errno_error());
+        if (raw != -1) return static_cast<uint8_t>(raw);
+
+        pros::delay(1);
+    }
+
+    pros::c::serial_flush(s_port);
+    auto errType =
+      peek ? CoproError::Type::DataCutOff : CoproError::Type::TimedOut;
+    return std::unexpected(
+      CoproError { .type = errType,
+                   .what = "Serial stream stopped (Timeout/Cutoff)",
+                   .where = { std::source_location::current() } });
+}
+
+std::expected<uint8_t, CoproError> read_byte() {
+    return serial_byte_op(false);
+}
+
+std::expected<uint8_t, CoproError> peek_byte() {
+    return serial_byte_op(true);
+}
+
+// Reads exactly N bytes.
+std::expected<std::vector<uint8_t>, CoproError> read_exact(size_t n) {
     std::vector<uint8_t> out;
-    out.push_back(static_cast<uint8_t>(id));
-    out.insert(out.end(), data.begin(), data.end());
-
-    // write data
-    {
-        auto rtn = copro::write(out);
-        if (!rtn.has_value()) {
-            rtn.error().where.push_back(std::source_location::current());
-            return std::unexpected(rtn.error());
-        }
+    out.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        out.push_back(TRY(read_byte()));
     }
-
-    // wait for a response
-    const int start = pros::millis();
-    while (pros::millis() > start + timeout) {
-        auto raw = copro::read();
-
-        // if the read was valid, return it
-        if (raw.has_value()) {
-            std::vector<uint8_t> rtn;
-            rtn.insert(rtn.end(), raw.value().begin() + 1, raw.value().end());
-            return rtn;
-        }
-
-        // if the read was not successful, we can retry if there's no data
-        if (raw.error().type == CoproError::Type::NoData) continue;
-
-        // otherwise, return the error
-        raw.error().where.push_back(std::source_location::current());
-        return std::unexpected(raw.error());
-    }
-
-    // if we're here, then we didn't receive a response within the timeout
-    return std::unexpected(CoproError {
-      .type = CoproError::Type::TimedOut,
-      .what = "timed out while trying to read response!",
-      .where = { std::source_location::current() },
-    });
+    return out;
 }
 
-static CoproError errno_to_copro() {
-    CoproError::Type type;
-    std::string what;
-    switch (errno) {
-        case EINVAL:
-            type = CoproError::Type::InvalidPort;
-            what = std::format(
-              "Invalid Port! Expected value between 1-21 (inclusive), but found {}",
-              PORT);
-            break;
-        case EACCES:
-            type = CoproError::Type::MultipleAccess;
-            what = "Multiple resources trying to access pros serial port API!";
-            break;
-        case EIO:
-            type = CoproError::Type::BrainIoError;
-            what = "Brain-side IO error (Vex SDK error)";
-        default:
-            type = CoproError::Type::Unknown;
-            what = "Unknown error occurred";
-    }
-    return CoproError { .type = type, .what = what, .where = {} };
+// Reads a POD type
+template<typename T>
+std::expected<T, CoproError> read_pod() {
+    static_assert(std::is_trivially_copyable_v<T>);
+    auto bytes = TRY(read_exact(sizeof(T)));
+    std::array<uint8_t, sizeof(T)> raw;
+    std::copy(bytes.begin(), bytes.end(), raw.begin());
+    return std::bit_cast<T>(raw);
 }
 
-std::expected<void, CoproError> init(int _port, int baud) noexcept {
-    // init static vars
-    PORT = _port;
-    // enable serial port
-    if (pros::c::serial_enable(PORT) == PROS_ERR) {
-        CoproError err = errno_to_copro();
-        err.where.push_back(std::source_location::current());
-        return std::unexpected(err);
-    }
+} // anonymous namespace
+
+// --- Public Implementation ---
+
+std::expected<void, CoproError> init(int port, int baud) noexcept {
+    s_port = port;
+
+    TRY(check_pros(pros::c::serial_enable(s_port)));
     pros::delay(50);
 
-    // set serial port baud rate
-    if (pros::c::serial_set_baudrate(PORT, baud) == PROS_ERR) {
-        CoproError err = errno_to_copro();
-        err.where.push_back(std::source_location::current());
-        return std::unexpected(err);
-    }
+    TRY(check_pros(pros::c::serial_set_baudrate(s_port, baud)));
     pros::delay(50);
 
-    // flush serial buffer
-    if (pros::c::serial_flush(PORT) == PROS_ERR) {
-        CoproError err = errno_to_copro();
-        err.where.push_back(std::source_location::current());
-        return std::unexpected(err);
-    }
+    TRY(check_pros(pros::c::serial_flush(s_port)));
     pros::delay(10);
 
-    // ping coprocessor until we get a response
+    // Ping until response
     while (true) {
         auto rtn = write_and_receive(MessageId::Ping, {}, 10);
-        if (rtn.has_value()) {
-            break;
-        } else { // error occurred
-            auto type = rtn.error().type;
-            if (type != CoproError::Type::TimedOut &&
-                type != CoproError::Type::NoData &&
-                type != CoproError::Type::CorruptedRead &&
-                type != CoproError::Type::DataCutOff) {
-                rtn.error().where.push_back(std::source_location::current());
-                return std::unexpected(rtn.error());
-            }
+        if (rtn) break;
+
+        // Only retry on specific communication errors
+        auto type = rtn.error().type;
+        bool can_retry = (type == CoproError::Type::TimedOut ||
+                          type == CoproError::Type::NoData ||
+                          type == CoproError::Type::CorruptedRead ||
+                          type == CoproError::Type::DataCutOff);
+
+        if (!can_retry) {
+            return std::unexpected(
+              trace_error(rtn.error(), std::source_location::current()));
         }
     }
 
-    return {}; // everything OK
+    return {};
 }
 
-// protocol:
-// [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed
-// payload]
 std::expected<void, CoproError>
 write(const std::vector<uint8_t>& message) noexcept {
-    // stuff the message
+    // 1. Stuff Payload
     std::vector<uint8_t> payload;
+    payload.reserve(message.size() + 8); // Heuristic reservation
+
     for (uint8_t b : message) {
         if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) {
             payload.push_back(ESCAPE);
@@ -213,223 +218,135 @@ write(const std::vector<uint8_t>& message) noexcept {
         payload.push_back(b);
     }
 
-    // check payload size
     if (payload.size() > std::numeric_limits<uint16_t>::max()) {
-        return std::unexpected(CoproError {
-          .type = CoproError::Type::MessageTooBig,
-          .what =
-            "message too big to send to coprocessor, exceeds max value of length byte",
-          .where = { std::source_location::current() } });
-    }
-
-    // create the header
-    std::vector<uint8_t> header;
-    // add the delimiter
-    header.push_back(DELIMITER_1);
-    header.push_back(DELIMITER_2);
-    // add the length
-    vector_append(header, static_cast<uint16_t>(payload.size()));
-    // add the CRC16
-    vector_append(header, crc16(message));
-
-    // write header
-    if (pros::c::serial_write(PORT, header.data(), header.size()) == PROS_ERR) {
-        CoproError err = errno_to_copro();
-        err.where.push_back(std::source_location::current());
-        return std::unexpected(err);
-    }
-
-    // write payload
-    if (pros::c::serial_write(PORT, payload.data(), payload.size()) ==
-        PROS_ERR) {
-        CoproError err = errno_to_copro();
-        err.where.push_back(std::source_location::current());
-        return std::unexpected(err);
-    }
-
-    // OK
-    return {};
-}
-
-[[nodiscard]]
-static std::expected<uint8_t, CoproError> peek_byte() noexcept {
-    // up to 2 attempts
-    for (int i = 0; i < 2; i++) {
-        const auto raw = pros::c::serial_peek_byte(PORT);
-
-        // check for pros error
-        // if this error ever occurs, there's no point in retrying
-        if (raw == PROS_ERR) {
-            CoproError err = errno_to_copro();
-            err.where.push_back(std::source_location::current());
-            return std::unexpected(err);
-        }
-
-        // return if we have data
-        if (raw != -1) {
-            return static_cast<uint8_t>(raw);
-        }
-
-        // small delay to allow new data to arrive
-        pros::delay(1);
-    }
-
-    // if we're here, then we never received data
-    pros::c::serial_flush(PORT);
-    return std::unexpected(CoproError {
-      .type = CoproError::Type::DataCutOff,
-      .what = "serial stream suddenly stopped. Copro disconnect?",
-      .where = { std::source_location::current() },
-    });
-}
-
-[[nodiscard]]
-static std::expected<uint8_t, CoproError> read_byte() noexcept {
-    // up to 2 attempts
-    for (int i = 0; i < 2; i++) {
-        const auto raw = pros::c::serial_read_byte(PORT);
-
-        // check for pros error
-        // if this error ever occurs, there's no point in retrying
-        if (raw == PROS_ERR) {
-            CoproError err = errno_to_copro();
-            err.where.push_back(std::source_location::current());
-            return std::unexpected(err);
-        }
-
-        // return if we have data
-        if (raw != -1) {
-            return static_cast<uint8_t>(raw);
-        }
-
-        // small delay to allow new data to arrive
-        pros::delay(1);
-    }
-
-    // if we're here, then we never received data
-    pros::c::serial_flush(PORT);
-    return std::unexpected(CoproError {
-      .type = CoproError::Type::TimedOut,
-      .what = "serial stream suddenly stopped. Copro disconnect?",
-      .where = { std::source_location::current() },
-    });
-}
-
-template<typename T>
-static std::expected<T, CoproError> read_stream() {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
-
-    // get raw data from serial stream
-    std::array<uint8_t, sizeof(T)> raw;
-    for (uint8_t& b : raw) {
-        auto in = read_byte();
-
-        // check for errors
-        if (!in.has_value()) {
-            in.error().where.push_back(std::source_location::current());
-            return std::unexpected(in.error());
-        }
-    }
-
-    // cast the raw data to T and return it
-    return std::bit_cast<T>(raw);
-}
-
-// protocol:
-// [DELIMITER_1 DELIMITER_2] [16-bit length] [CRC16] [stuffed
-// payload]
-std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
-    // check if there's data available
-    const int avail = pros::c::serial_get_read_avail(PORT);
-    if (avail == 0) {
-        return std::unexpected(CoproError {
-          .type = CoproError::Type::NoData,
-          .what = "tried reading serial stream, but no data present!",
-          .where = { std::source_location::current() } });
-    }
-    if (avail == PROS_ERR) {
-        CoproError err = errno_to_copro();
-        err.where.push_back(std::source_location::current());
-        return std::unexpected(err);
-    }
-
-    // find the next delimiter
-    while (true) {
-        // find DELIMITER_1
-        if (read_byte() != DELIMITER_1) {
-            continue;
-        }
-        // if the next byte is DELIMITER_2, we've found the
-        // delimiter
-        if (read_byte() == DELIMITER_2) {
-            break;
-        }
-    }
-
-    // read the header
-    const auto length = read_stream<uint16_t>();
-    const auto crc = read_stream<uint16_t>();
-
-    // check for errors
-    if (!length.has_value()) {
-        auto err = length.error();
-        err.where.push_back(std::source_location::current());
-    }
-    if (!crc.has_value()) {
-        auto err = crc.error();
-        err.where.push_back(std::source_location::current());
-    }
-
-    // read the payload
-    std::vector<uint8_t> payload;
-    for (int i = 0; i < length.value(); ++i) {
-        auto b = peek_byte();
-        // check for errors from peek_byte
-        if (!b.has_value()) {
-            b.error().where.push_back(std::source_location::current());
-            return std::unexpected(b.error());
-        }
-
-        // if the next byte is DELIMITER_1 or DELIMITER_2, bail
-        if (b == DELIMITER_1 || b == DELIMITER_2) {
-            return std::unexpected(
-              CoproError { .type = CoproError::Type::CorruptedRead,
-                           .what = "Unescaped delimiter found!",
-                           .where = { std::source_location::current() } });
-
-        } else { // otherwise, pop it from the serial buffer
-            auto x = read_byte();
-            if (!x.has_value()) {
-                x.error().where.push_back(std::source_location::current());
-                return std::unexpected(x.error());
-            }
-        }
-
-        // if an escape is found, read the next byte
-        if (b == ESCAPE) {
-            ++i;
-            auto in = read_byte();
-            // check for errors
-            if (!in.has_value()) {
-                in.error().where.push_back(std::source_location::current());
-                return std::unexpected(in.error());
-            }
-            payload.push_back(in.value());
-        } else {
-            payload.push_back(b.value());
-        }
-    }
-
-    // validate payload with CRC
-    if (crc != crc16(payload)) {
         return std::unexpected(
-          CoproError { .type = CoproError::Type::CorruptedRead,
-                       .what = "CRC check failed!",
+          CoproError { .type = CoproError::Type::MessageTooBig,
+                       .what = "Payload exceeds max length",
                        .where = { std::source_location::current() } });
     }
 
-    // return payload
-    return payload;
+    // 2. Build Header
+    std::vector<uint8_t> packet;
+    packet.reserve(payload.size() + 6);
+    packet.push_back(DELIMITER_1);
+    packet.push_back(DELIMITER_2);
+
+    auto len_bytes = serialize(static_cast<uint16_t>(payload.size()));
+    packet.insert(packet.end(), len_bytes.begin(), len_bytes.end());
+
+    auto crc_bytes =
+      serialize(crc16(message)); // CRC computed on *original* message
+    packet.insert(packet.end(), crc_bytes.begin(), crc_bytes.end());
+
+    // 3. Send Header + Payload (Split writes to match original logic)
+    TRY(
+      check_pros(pros::c::serial_write(s_port, packet.data(), packet.size())));
+    TRY(check_pros(
+      pros::c::serial_write(s_port, payload.data(), payload.size())));
+
+    return {};
 }
+
+std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
+    int avail = pros::c::serial_get_read_avail(s_port);
+    if (avail == PROS_ERR) return std::unexpected(make_errno_error());
+    if (avail == 0) {
+        return std::unexpected(
+          CoproError { CoproError::Type::NoData,
+                       "No data",
+                       { std::source_location::current() } });
+    }
+
+    // 1. Sync to delimiters
+    while (true) {
+        if (TRY(read_byte()) == DELIMITER_1) {
+            if (TRY(read_byte()) == DELIMITER_2) break;
+        }
+    }
+
+    // 2. Read Header
+    uint16_t length = TRY(read_pod<uint16_t>());
+    uint16_t expected_crc = TRY(read_pod<uint16_t>());
+
+    // 3. Read Raw Stuffed Payload
+    // The length on wire is the *stuffed* length
+    std::vector<uint8_t> raw_payload = TRY(read_exact(length));
+
+    // 4. Unstuff
+    std::vector<uint8_t> data;
+    data.reserve(length); // Will be <= raw length
+
+    for (size_t i = 0; i < raw_payload.size(); ++i) {
+        uint8_t b = raw_payload[i];
+
+        // Sanity check: Inner delimiters shouldn't exist unless escaped
+        if (b == DELIMITER_1 || b == DELIMITER_2) {
+            return std::unexpected(
+              CoproError { CoproError::Type::CorruptedRead,
+                           "Unescaped delimiter found",
+                           { std::source_location::current() } });
+        }
+
+        if (b == ESCAPE) {
+            if (++i >= raw_payload.size()) {
+                return std::unexpected(
+                  CoproError { CoproError::Type::CorruptedRead,
+                               "Trailing escape byte",
+                               { std::source_location::current() } });
+            }
+            data.push_back(raw_payload[i]);
+        } else {
+            data.push_back(b);
+        }
+    }
+
+    // 5. Verify CRC
+    if (crc16(data) != expected_crc) {
+        return std::unexpected(
+          CoproError { CoproError::Type::CorruptedRead,
+                       "CRC Mismatch",
+                       { std::source_location::current() } });
+    }
+
+    return data;
+}
+
+std::expected<std::vector<uint8_t>, CoproError>
+write_and_receive(MessageId id,
+                  const std::vector<uint8_t>& data,
+                  int timeout) noexcept {
+
+    // Prepare packet: [ID] [DATA...]
+    std::vector<uint8_t> packet;
+    packet.reserve(data.size() + 1);
+    packet.push_back(static_cast<uint8_t>(id));
+    packet.insert(packet.end(), data.begin(), data.end());
+
+    TRY(write(packet));
+
+    const int start = pros::millis();
+    while (pros::millis() < start + timeout) {
+        auto raw = read();
+        if (raw.has_value()) {
+            // Strip the ID (first byte) from the response
+            if (raw->empty())
+                return {}; // Should not happen based on protocol, but safety
+                           // first
+            return std::vector<uint8_t>(raw->begin() + 1, raw->end());
+        }
+
+        if (raw.error().type == CoproError::Type::NoData) {
+            pros::delay(2); // Yield slightly to prevent tight loop burning CPU
+            continue;
+        }
+
+        return std::unexpected(
+          trace_error(raw.error(), std::source_location::current()));
+    }
+
+    return std::unexpected(CoproError { CoproError::Type::TimedOut,
+                                        "Response timeout",
+                                        { std::source_location::current() } });
+}
+
 } // namespace copro

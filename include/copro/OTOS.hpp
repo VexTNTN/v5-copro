@@ -12,6 +12,7 @@ struct OtosError {
     enum class Type {
         None,
         CoproInternalIO,
+        CoproInternalUnknown,
         EmptyResponse,
         CorruptedResponse,
         NoResponse,

@@ -3,6 +3,7 @@
 #include "pros/error.h"
 #include "pros/rtos.hpp"
 #include <cmath>
+#include <source_location>
 
 // getCoprocessorVersion,         // 0 // low prio
 // otos::getStatus,               // 1 // done
@@ -106,53 +107,79 @@ static constexpr std::int8_t to_i8(float v) noexcept {
     return static_cast<std::int8_t>(r);
 }
 
-std::optional<OtosError> validate_message(const std::vector<uint8_t>& message,
-                                          std::size_t expected_length) {
+// validate message. Checks length and copro status byte
+std::expected<void, OtosError>
+validate_message(const std::vector<uint8_t>& message,
+                 std::size_t expected_length) {
     // check that the message isn't empty
     if (message.empty()) {
-        return OtosError { .type = OtosError::Type::EmptyResponse,
-                           .what = "Empty response from coprocessor",
-                           .where = { std::source_location::current() } };
+        return std::unexpected(
+          OtosError { .type = OtosError::Type::EmptyResponse,
+                      .what = "Empty response from coprocessor",
+                      .where = { std::source_location::current() } });
     }
+
+    // check if the coprocessor reported any errors
+    if (static_cast<CoproStatus>(message.at(0)) != CoproStatus::Ok) {
+        OtosError::Type type;
+        std::string what;
+        switch (static_cast<CoproStatus>(message.at(0))) {
+            case CoproStatus::IoError:
+                type = OtosError::Type::CoproInternalIO;
+                what = "IO error reported by coprocessor";
+                break;
+            default:
+                type = OtosError::Type::CoproInternalUnknown;
+                what = "Unknown error reported by coprocessor";
+        };
+
+        return std::unexpected(
+          OtosError { .type = type,
+                      .what = what,
+                      .where = { std::source_location::current() } });
+    }
+
     // check that the size of the message is what we expect
     if (message.size() != expected_length) {
-        return OtosError { .type = OtosError::Type::WrongMessageLength,
-                           .what = std::format(
-                             "Invalid response length! Expected {} but has {}",
-                             expected_length,
-                             message.size()),
-                           .where = { std::source_location::current() } };
+        return std::unexpected(OtosError {
+          .type = OtosError::Type::WrongMessageLength,
+          .what = std::format("Invalid response length! Expected {} but has {}",
+                              expected_length,
+                              message.size()),
+          .where = { std::source_location::current() } });
     }
-    // check the
+
+    // everything OK
+    return {};
 }
 
 std::expected<Status, OtosError> get_status() noexcept {
     constexpr int ID = 1;
 
-    union {
-        struct {
-            uint8_t warn_tilt_angle       : 1;
-            uint8_t warn_optical_tracking : 1;
-            uint8_t reserved              : 4;
-            uint8_t optical_fatal         : 1;
-            uint8_t imu_fatal             : 1;
-        };
-
-        uint8_t value;
-    } s;
-
     const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
 
-    if (!check_status_byte(raw)) {
-        return Status { 0, 0, 0, 0 };
-    } else {
+    return validate_message(raw, 2).transform([&]() {
+        union {
+            struct {
+                uint8_t warn_tilt_angle       : 1;
+                uint8_t warn_optical_tracking : 1;
+                uint8_t reserved              : 4;
+                uint8_t optical_fatal         : 1;
+                uint8_t imu_fatal             : 1;
+            };
+
+            uint8_t value;
+        } s;
+
         s.value = raw.at(0);
-        return OtosError { static_cast<bool>(s.warn_tilt_angle),
-                           static_cast<bool>(s.warn_optical_tracking),
-                           static_cast<bool>(s.optical_fatal),
-                           static_cast<bool>(s.imu_fatal),
-                           0 };
-    }
+
+        return Status {
+            static_cast<bool>(s.warn_tilt_angle),
+            static_cast<bool>(s.warn_optical_tracking),
+            static_cast<bool>(s.optical_fatal),
+            static_cast<bool>(s.imu_fatal),
+        };
+    });
 }
 
 std::expected<bool, OtosError> self_test() noexcept {
