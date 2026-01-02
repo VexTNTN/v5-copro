@@ -83,6 +83,9 @@ struct CoproError {
     std::vector<std::source_location> where;
 };
 
+// enable printing CoproError using std::cout
+std::ostream& operator<<(std::ostream& os, const CoproError& err);
+
 class Coprocessor {
   public:
     /**
@@ -130,7 +133,8 @@ class Coprocessor {
     std::expected<std::vector<uint8_t>, CoproError>
     write_and_receive(MessageId id,
                       const std::vector<uint8_t>& data,
-                      int timeout) noexcept;
+                      int timeout,
+                      bool silence = false) noexcept;
 
     constexpr ~Coprocessor() = delete ("Should never need to be destroyed");
     constexpr Coprocessor(Coprocessor&) =
@@ -139,6 +143,11 @@ class Coprocessor {
       delete ("should never beed to be copied");
 
   private:
+    [[nodiscard]]
+    std::expected<std::vector<uint8_t>, CoproError>
+    write_and_receive_impl(MessageId id,
+                           const std::vector<uint8_t>& data,
+                           int timeout) noexcept;
     std::atomic<bool> initialized;
     uint8_t port;
     const uint32_t baud;

@@ -4,6 +4,7 @@
 #include "pros/serial.h"
 #include <cerrno>
 #include <format>
+#include <iostream>
 
 namespace copro {
 
@@ -319,6 +320,37 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
 
 // --- Public Implementation ---
 
+std::ostream& operator<<(std::ostream& os, const CoproError& err) {
+    os << "[CoproError] Type: ";
+
+    switch (err.type) {
+        case CoproError::Type::Unknown: os << "Unknown"; break;
+        case CoproError::Type::InvalidPort: os << "InvalidPort"; break;
+        case CoproError::Type::NoDevice: os << "NoDevice"; break;
+        case CoproError::Type::MultipleAccess: os << "MultipleAccess"; break;
+        case CoproError::Type::TimedOut: os << "TimedOut"; break;
+        case CoproError::Type::MessageTooBig: os << "MessageTooBig"; break;
+        case CoproError::Type::BrainIoError: os << "BrainIoError"; break;
+        case CoproError::Type::NoData: os << "NoData"; break;
+        case CoproError::Type::CorruptedRead: os << "CorruptedRead"; break;
+        case CoproError::Type::DataCutOff: os << "DataCutOff"; break;
+        case CoproError::Type::InvalidBaud: os << "InvalidBaud"; break;
+        default: os << "Unknown(" << (int)err.type << ")"; break;
+    }
+
+    os << " | Msg: \"" << err.what << "\"\n";
+
+    if (!err.where.empty()) {
+        os << "  Trace:\n";
+        for (const auto& loc : err.where) {
+            os << "    at " << loc.function_name() << " (" << loc.file_name()
+               << ":" << loc.line() << ":" << loc.column()
+               << ")\n"; // Added column here
+        }
+    }
+    return os;
+}
+
 std::expected<void, CoproError> Coprocessor::init(int port, int baud) noexcept {
     s_port = port;
 
@@ -355,7 +387,20 @@ std::expected<void, CoproError> Coprocessor::init(int port, int baud) noexcept {
 std::expected<std::vector<uint8_t>, CoproError>
 Coprocessor::write_and_receive(MessageId id,
                                const std::vector<uint8_t>& data,
-                               int timeout) noexcept {
+                               int timeout,
+                               bool silence) noexcept {
+    // this wraps write_and_receive_impl, so we can conditionally print errors
+    auto rtn = write_and_receive_impl(id, data, timeout);
+    if (!rtn.has_value() && !silence) {
+        std::cout << rtn.error() << std::endl;
+    }
+    return rtn;
+}
+
+std::expected<std::vector<uint8_t>, CoproError>
+Coprocessor::write_and_receive_impl(MessageId id,
+                                    const std::vector<uint8_t>& data,
+                                    int timeout) noexcept {
 
     // Prepare packet: [ID] [DATA...]
     std::vector<uint8_t> packet;
@@ -371,8 +416,8 @@ Coprocessor::write_and_receive(MessageId id,
         auto raw = read();
         if (raw.has_value()) {
             if (raw->empty())
-                return {}; // Should not happen based on protocol, but safety
-                           // first
+                return {}; // Should not happen based on protocol, but
+                           // safety first
             // Strip the ID (first byte) from the response
             return std::vector<uint8_t>(raw->begin() + 1, raw->end());
         }
