@@ -68,7 +68,7 @@ class Coprocessor {
 
     /**
      * @brief Initialize the coprocessor serial port.
-     * Blocks until handshake is complete.
+     * Blocks shortly. Does not perform handshake
      */
     [[nodiscard]]
     std::expected<void, CoproError> init() noexcept;

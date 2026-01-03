@@ -174,26 +174,6 @@ std::expected<void, CoproError> Coprocessor::init() noexcept {
     if (res == PROS_ERR) return std::unexpected(make_errno_error(m_port));
     pros::delay(10);
 
-    // Ping until response
-    while (true) {
-        auto rtn = write_and_receive(MessageId::Ping, {}, 10);
-        if (rtn) {
-            break;
-        }
-
-        // Only retry on specific communication errors
-        auto type = rtn.error().type;
-        bool can_retry = (type == CoproError::Type::TimedOut ||
-                          type == CoproError::Type::NoData ||
-                          type == CoproError::Type::CorruptedRead ||
-                          type == CoproError::Type::DataCutOff);
-
-        if (!can_retry) {
-            return std::unexpected(
-              trace_error(rtn.error(), std::source_location::current()));
-        }
-    }
-
     return {};
 }
 
