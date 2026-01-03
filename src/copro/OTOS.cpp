@@ -1,98 +1,73 @@
 #include "OTOS.hpp"
-#include "Coprocessor.hpp"
-#include "pros/error.h"
-#include "pros/rtos.hpp"
+#include <algorithm>
+#include <bit>
 #include <cmath>
-#include <source_location>
+#include <format>
+#include <iostream>
+#include <limits>
 
-// getCoprocessorVersion,         // 0 // low prio
-// otos::getStatus,               // 1 // done
-// otos::getVersion,              // 2 // low prio
-// otos::resetTracking,           // 3 // done
-// otos::getPosVelAccel,          // 4 // low prio
-// otos::getPosVelAccelStdDev,    // 5 // low prio
-// otos::getPosVelAccelAndStdDev, // 6 // low prio
-// otos::getPose,                 // 7  // done
-// otos::setPose,                 // 8  // done
-// otos::getPositionStdDev,       // 9  // low prio
-// otos::getVelocity,             // 10 // low prio
-// otos::getVelocityStdDev,       // 11 // low prio
-
-// otos::getAcceleration,         // 12 // in progress
-
-// otos::getAccelerationStdDev,   // 13 // low prio
-// otos::getLinearUnit,           // 14 // unnecessary
-// otos::setLinearUnit,           // 15 // unnecessary
-// otos::getAngularUnit,          // 16 // unnecessary
-// otos::setAngularUnit,          // 17 // unnecessary
-// otos::getLinearScalar,         // 18 // done
-// otos::setLinearScalar,         // 19 // done
-// otos::getAngularScalar,        // 20 // done
-// otos::setAngularScalar,        // 21 // done
-// otos::getSignalProcessConfig,  // 22 // low prio
-// otos::setSignalProcessConfig,  // 23 // low prio
-// otos::selfTest,                // 24 // done
-// otos::calibrate,               // 25 // done
-// otos::isCalibrated,            // 26 // done
-// otos::getOffset,               // 27 // impossible until FW bug fixed
-// otos::setOffset                // 28 // done
-
-// TODO: add mutex for copro communication?
+using copro::CoproError;
+using copro::MessageId;
 
 namespace otos {
 
-//////////////////////////////////////
-// constants
-/////////////////
+// --- OtosError Implementation ---
+
+std::ostream& operator<<(std::ostream& os, const OtosError& err) {
+    os << "[OtosError] Type: " << (int)err.type << " | Msg: \"" << err.what
+       << "\"\n";
+    if (!err.where.empty()) {
+        os << "  Trace:\n";
+        for (const auto& loc : err.where) {
+            os << "    at " << loc.function_name() << " (" << loc.file_name()
+               << ":" << loc.line() << ")\n";
+        }
+    }
+    return os;
+}
+
+namespace { // Internal Linkage
+
 constexpr int READ_TIMEOUT = 30;
 
-constexpr float kRadianToDegree = 180.0 / 3.14159;
-constexpr float kDegreeToRadian = 3.14159 / 180.0;
-constexpr float kMeterToInch = 39.3701;
-constexpr float kInchToMeter = 1.0 / kMeterToInch;
+// --- Constants ---
+constexpr float RAD_TO_DEG = 180.0 / 3.14159;
+constexpr float DEG_TO_RAD = 3.14159 / 180.0;
+constexpr float METER_TO_INCH = 39.3701;
+constexpr float INCH_TO_METER = 1.0 / METER_TO_INCH;
 
-constexpr float kMeterToInt16 = 32768.0 / 10.0;
-constexpr float kInt16ToMeter = 1.0 / kMeterToInt16;
-constexpr float kInt16ToInch = kInt16ToMeter * kMeterToInch;
-constexpr float kInchToInt16 = 1.0 / kInt16ToInch;
+constexpr float METER_TO_INT16 = 32768.0 / 10.0;
+constexpr float INT16_TO_METER = 1.0 / METER_TO_INT16;
+constexpr float INT16_TO_INCH = INT16_TO_METER * METER_TO_INCH;
+constexpr float INCH_TO_INT16 = 1.0 / INT16_TO_INCH;
 
-constexpr float kRadToInt16 = 32768.0 / 3.14159;
-constexpr float kInt16ToRad = 1.0 / kRadToInt16;
-constexpr float kInt16ToDeg = kInt16ToRad * kRadianToDegree;
-constexpr float kDegToInt16 = 1.0 / kInt16ToDeg;
+constexpr float RAD_TO_INT16 = 32768.0 / 3.14159;
+constexpr float INT16_TO_RAD = 1.0 / RAD_TO_INT16;
+constexpr float INT16_TO_DEG = INT16_TO_RAD * RAD_TO_DEG;
+constexpr float DEG_TO_INT16 = 1.0 / INT16_TO_DEG;
 
-static constexpr float kMpssToInt16 = 32768.0f / (16.0f * 9.80665f);
-static constexpr float kInt16ToMpss = 1.0f / kMpssToInt16;
+static constexpr float MPSS_TO_INT16 = 32768.0f / (16.0f * 9.80665f);
+static constexpr float INT16_TO_MPSS = 1.0f / MPSS_TO_INT16;
 
-static constexpr float kRpssToInt16 = 32768.0f / (M_PI * 1000.0f);
-static constexpr float kInt16ToRpss = 1.0f / kRpssToInt16;
+static constexpr float RPSS_TO_INT16 = 32768.0f / (M_PI * 1000.0f);
+static constexpr float INT16_TO_RPSS = 1.0f / RPSS_TO_INT16;
 
-enum class CoproStatus : std::uint8_t {
-    Ok = 0,
-    IoError = 2,
-};
+// --- Helper Functions ---
 
-// helper function to convert float to int16 with proper clamping and rounding
 static constexpr std::int16_t to_i16(float v) noexcept {
-    constexpr auto I16_MIN = std::numeric_limits<std::int16_t>::min(); // -32768
-    constexpr auto I16_MAX = std::numeric_limits<std::int16_t>::max(); //  32767
+    constexpr auto I16_MIN = std::numeric_limits<std::int16_t>::min();
+    constexpr auto I16_MAX = std::numeric_limits<std::int16_t>::max();
 
     if (std::isnan(v)) return I16_MAX;
     if (std::isinf(v)) return std::signbit(v) ? I16_MIN : I16_MAX;
 
-    // Clamp first to avoid any overflow/FE_INVALID issues in rounding routines
     double d = std::clamp(static_cast<double>(v),
                           static_cast<double>(I16_MIN),
                           static_cast<double>(I16_MAX));
-
-    // std::round: half away from zero
     long long r = static_cast<long long>(std::round(d));
-
-    // After the clamp, r is guaranteed in-range, so this cast is safe
     return static_cast<std::int16_t>(r);
 }
 
-// helper function to convert float to int8 with proper clamping and rounding
 static constexpr std::int8_t to_i8(float v) noexcept {
     constexpr std::int8_t I8_MIN = -128;
     constexpr std::int8_t I8_MAX = 127;
@@ -100,141 +75,197 @@ static constexpr std::int8_t to_i8(float v) noexcept {
     if (std::isnan(v)) return I8_MAX;
     if (std::isinf(v)) return std::signbit(v) ? I8_MIN : I8_MAX;
 
-    // saturate then round (half away from zero)
     double d =
       std::clamp(static_cast<double>(v), double(I8_MIN), double(I8_MAX));
     long long r = static_cast<long long>(std::round(d));
     return static_cast<std::int8_t>(r);
 }
 
-// validate message. Checks length and copro status byte
+// --- Error Conversion Helpers ---
+
+OtosError make_otos_error(OtosError::Type type, std::string what) {
+    return OtosError { type,
+                       std::move(what),
+                       { std::source_location::current() } };
+}
+
+// Convert low-level CoproError to high-level OtosError
+OtosError from_copro(copro::CoproError err) {
+    OtosError::Type type;
+    switch (err.type) {
+        case CoproError::Type::TimedOut:
+            type = OtosError::Type::NoResponse;
+            break;
+        case CoproError::Type::NoData:
+            type = OtosError::Type::NoResponse;
+            break;
+        case CoproError::Type::CorruptedRead:
+            type = OtosError::Type::CorruptedResponse;
+            break;
+        case CoproError::Type::DataCutOff:
+            type = OtosError::Type::CorruptedResponse;
+            break;
+        case CoproError::Type::BrainIoError:
+            type = OtosError::Type::CoproInternalIO;
+            break;
+        case CoproError::Type::MessageTooBig:
+            type = OtosError::Type::WrongMessageLength;
+            break;
+        default: type = OtosError::Type::TransportError; break;
+    }
+
+    OtosError out;
+    out.type = type;
+    out.what = std::move(err.what);
+    out.where = std::move(err.where);
+    out.where.push_back(std::source_location::current());
+    return out;
+}
+
+// --- Error Mapping Overloads ---
+
+// Case 1: Convert CoproError -> OtosError
+OtosError map_failure(copro::CoproError err, std::source_location loc) {
+    auto out = from_copro(std::move(err));
+    out.where.push_back(loc); // Add the location where TRY was called
+    return out;
+}
+
+// Case 2: Pass-through OtosError (already converted or created)
+OtosError map_failure(OtosError err, std::source_location loc) {
+    err.where.push_back(loc); // Add the location where TRY was called
+    return err;
+}
+
+// Helper to conditionally move the value only if it isn't void
+template<typename T, typename E>
+constexpr auto unwrap(std::expected<T, E>& expected) {
+    if constexpr (std::is_void_v<T>) {
+        return;
+    } else {
+        return std::move(*expected);
+    }
+}
+
+} // anonymous namespace
+
+// Defines for the TRY macro to work within member functions.
+// Automatically converts CoproError to OtosError if encountered.
+#define TRY(expr)                                                        \
+    ({                                                                   \
+        auto _res = (expr);                                              \
+        if (!_res.has_value()) {                                         \
+            /* Automatically selects the correct map_failure overload */ \
+            return std::unexpected(                                      \
+              map_failure(std::move(_res.error()),                       \
+                          std::source_location::current()));             \
+        }                                                                \
+        unwrap(_res);                                                    \
+    })
+
+// --- Class Implementation ---
+
 std::expected<void, OtosError>
-validate_message(const std::vector<uint8_t>& message,
-                 std::size_t expected_length) {
-    // check that the message isn't empty
+Otos::validate_message(const std::vector<uint8_t>& message,
+                       size_t expected_len) {
     if (message.empty()) {
         return std::unexpected(
-          OtosError { .type = OtosError::Type::EmptyResponse,
-                      .what = "Empty response from coprocessor",
-                      .where = { std::source_location::current() } });
+          make_otos_error(OtosError::Type::EmptyResponse,
+                          "Empty response from coprocessor"));
     }
 
-    // check if the coprocessor reported any errors
-    if (static_cast<CoproStatus>(message.at(0)) != CoproStatus::Ok) {
-        OtosError::Type type;
-        std::string what;
-        switch (static_cast<CoproStatus>(message.at(0))) {
-            case CoproStatus::IoError:
-                type = OtosError::Type::CoproInternalIO;
-                what = "IO error reported by coprocessor";
-                break;
-            default:
-                type = OtosError::Type::CoproInternalUnknown;
-                what = "Unknown error reported by coprocessor";
-        };
-
+    // Check status byte (0 = Ok, 2 = IoError, etc.)
+    auto status = static_cast<CoproStatus>(message.at(0));
+    if (status != CoproStatus::Ok) {
+        if (status == CoproStatus::IoError) {
+            return std::unexpected(
+              make_otos_error(OtosError::Type::CoproInternalIO,
+                              "IO error reported by coprocessor"));
+        }
         return std::unexpected(
-          OtosError { .type = type,
-                      .what = what,
-                      .where = { std::source_location::current() } });
+          make_otos_error(OtosError::Type::CoproInternalUnknown,
+                          "Unknown error reported by coprocessor"));
     }
 
-    // check that the size of the message is what we expect
-    if (message.size() != expected_length) {
-        return std::unexpected(OtosError {
-          .type = OtosError::Type::WrongMessageLength,
-          .what = std::format("Invalid response length! Expected {} but has {}",
-                              expected_length,
-                              message.size()),
-          .where = { std::source_location::current() } });
+    if (message.size() != expected_len) {
+        return std::unexpected(make_otos_error(
+          OtosError::Type::WrongMessageLength,
+          std::format("Invalid response length! Expected {} but has {}",
+                      expected_len,
+                      message.size())));
     }
 
-    // everything OK
     return {};
 }
 
-std::expected<Status, OtosError> get_status() noexcept {
-    constexpr int ID = 1;
+std::expected<Status, OtosError> Otos::get_status() noexcept {
+    auto raw = TRY(
+      m_copro.write_and_receive(MessageId::GetOtosStatus, {}, READ_TIMEOUT));
 
-    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+    TRY(validate_message(raw, 2));
 
-    return validate_message(raw, 2).transform([&]() {
-        union {
-            struct {
-                uint8_t warn_tilt_angle       : 1;
-                uint8_t warn_optical_tracking : 1;
-                uint8_t reserved              : 4;
-                uint8_t optical_fatal         : 1;
-                uint8_t imu_fatal             : 1;
-            };
-
-            uint8_t value;
-        } s;
-
-        s.value = raw.at(0);
-
-        return Status {
-            static_cast<bool>(s.warn_tilt_angle),
-            static_cast<bool>(s.warn_optical_tracking),
-            static_cast<bool>(s.optical_fatal),
-            static_cast<bool>(s.imu_fatal),
+    union {
+        struct {
+            uint8_t warn_tilt_angle       : 1;
+            uint8_t warn_optical_tracking : 1;
+            uint8_t reserved              : 4;
+            uint8_t optical_fatal         : 1;
+            uint8_t imu_fatal             : 1;
         };
-    });
+
+        uint8_t value;
+    } s;
+
+    s.value = raw.at(1);
+
+    return Status {
+        static_cast<bool>(s.warn_tilt_angle),
+        static_cast<bool>(s.warn_optical_tracking),
+        static_cast<bool>(s.optical_fatal),
+        static_cast<bool>(s.imu_fatal),
+    };
 }
 
-std::expected<bool, OtosError> self_test() noexcept {
-    constexpr int ID = 24;
-    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.size() != 1) {
-        return PROS_ERR;
-    } else {
-        return 1;
-    }
+std::expected<bool, OtosError> Otos::self_test() noexcept {
+    auto raw =
+      TRY(m_copro.write_and_receive(MessageId::OtosSelfTest, {}, READ_TIMEOUT));
+
+    TRY(validate_message(raw, 1));
+
+    return true;
 }
 
-std::expected<void, OtosError> reset_tracking() noexcept {
-    constexpr int ID = 3;
-    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.size() != 1) {
-        return PROS_ERR;
-    } else {
-        return 1;
-    }
+std::expected<void, OtosError> Otos::reset_tracking() noexcept {
+    auto raw = TRY(m_copro.write_and_receive(MessageId::OtosResetTracking,
+                                             {},
+                                             READ_TIMEOUT));
+
+    TRY(validate_message(raw, 1));
+
+    return {};
 }
 
-//////////////////////////////////////
-// pose
-/////////////////
+std::expected<Pose, OtosError> Otos::get_pose() noexcept {
+    auto raw =
+      TRY(m_copro.write_and_receive(MessageId::OtosGetPose, {}, READ_TIMEOUT));
 
-std::expected<Pose, OtosError> get_pose() noexcept {
-    constexpr int ID = 7;
-    constexpr Pose ERROR = { std::numeric_limits<float>::infinity(),
-                             std::numeric_limits<float>::infinity(),
-                             std::numeric_limits<float>::infinity() };
+    TRY(validate_message(raw, 7));
 
-    // request, recieve
-    const auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (tmp.size() != 6) {
-        return ERROR;
-    }
+    int16_t rawX = (raw.at(2) << 8) | raw.at(1);
+    int16_t rawY = (raw.at(4) << 8) | raw.at(3);
+    int16_t rawH = (raw.at(6) << 8) | raw.at(5);
 
-    // parse raw data
-    int16_t rawX = (tmp[1] << 8) | tmp[0];
-    int16_t rawY = (tmp[3] << 8) | tmp[2];
-    int16_t rawH = (tmp[5] << 8) | tmp[4];
-
-    return { rawX * kInt16ToInch, rawY * kInt16ToInch, rawH * kInt16ToDeg };
+    return Pose { rawX * INT16_TO_INCH,
+                  rawY * INT16_TO_INCH,
+                  rawH * INT16_TO_DEG };
 }
 
-std::expected<void, OtosError> set_pose(Pose pose) noexcept {
-    constexpr int ID = 8;
-    // cast
-    int16_t rawX = to_i16(pose.x * kInchToInt16);
-    int16_t rawY = to_i16(pose.y * kInchToInt16);
-    int16_t rawH = to_i16(pose.h * kDegToInt16);
-    // init vector
+std::expected<void, OtosError> Otos::set_pose(Pose pose) noexcept {
+    int16_t rawX = to_i16(pose.x * INCH_TO_INT16);
+    int16_t rawY = to_i16(pose.y * INCH_TO_INT16);
+    int16_t rawH = to_i16(pose.h * DEG_TO_INT16);
+
     std::vector<uint8_t> out(6);
-    // serialize
     out.at(0) = rawX & 0xFF;
     out.at(1) = (rawX >> 8) & 0xFF;
     out.at(2) = rawY & 0xFF;
@@ -242,76 +273,44 @@ std::expected<void, OtosError> set_pose(Pose pose) noexcept {
     out.at(4) = rawH & 0xFF;
     out.at(5) = (rawH >> 8) & 0xFF;
 
-    // write and get response
-    auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
-    pros::delay(10);
-    if (raw.size() != 1) {
-        return PROS_ERR;
+    auto raw =
+      TRY(m_copro.write_and_receive(MessageId::OtosSetPose, out, READ_TIMEOUT));
+
+    TRY(validate_message(raw, 1));
+
+    // Verify
+    auto p = TRY(get_pose());
+
+    if (std::abs(p.x - pose.x) > 1.0f || std::abs(p.y - pose.y) > 1.0f ||
+        std::abs(p.h - pose.h) > 1.0f) {
+        return std::unexpected(make_otos_error(OtosError::Type::CoproInternalIO,
+                                               "SetPose verification failed"));
     }
 
-    // check that the pose was actually set
-    auto p = get_pose();
-    // check for error
-    if (p.x == INFINITY) {
-        return PROS_ERR;
-    }
-
-    // check that all the fields are the same
-    if (std::fabs(p.x - pose.x) > 1) {
-        return PROS_ERR;
-    }
-
-    if (std::fabs(p.y - pose.y) > 1) {
-        return PROS_ERR;
-    }
-
-    if (std::fabs(p.h - pose.h) > 1) {
-        return PROS_ERR;
-    }
-
-    // success
-    return 1;
+    return {};
 }
 
-//////////////////////////////////////
-// acceleration
-/////////////////
+std::expected<Acceleration, OtosError> Otos::get_acceleration() noexcept {
+    auto raw =
+      TRY(m_copro.write_and_receive(MessageId::OtosGetAccel, {}, READ_TIMEOUT));
 
-std::expected<Acceleration, OtosError> get_acceleration() noexcept {
-    constexpr int ID = 12;
-    constexpr Pose ERROR = { std::numeric_limits<float>::infinity(),
-                             std::numeric_limits<float>::infinity(),
-                             std::numeric_limits<float>::infinity() };
+    TRY(validate_message(raw, 7));
 
-    // request, recieve
-    const auto tmp = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (tmp.size() != 6) {
-        return ERROR;
-    }
+    int16_t rawX = (raw.at(2) << 8) | raw.at(1);
+    int16_t rawY = (raw.at(4) << 8) | raw.at(3);
+    int16_t rawH = (raw.at(6) << 8) | raw.at(5);
 
-    // parse raw data
-    int16_t rawX = (tmp[1] << 8) | tmp[0];
-    int16_t rawY = (tmp[3] << 8) | tmp[2];
-    int16_t rawH = (tmp[5] << 8) | tmp[4];
-
-    return { rawX * kInt16ToMpss * kMeterToInch,
-             rawY * kInt16ToMpss * kMeterToInch,
-             static_cast<float>(rawH * kInt16ToRpss / 360.0) };
+    return Acceleration { rawX * INT16_TO_MPSS * METER_TO_INCH,
+                          rawY * INT16_TO_MPSS * METER_TO_INCH,
+                          static_cast<float>(rawH * INT16_TO_RPSS / 360.0) };
 }
 
-//////////////////////////////////////
-// offset
-/////////////////
+std::expected<void, OtosError> Otos::set_offset(Pose pose) noexcept {
+    int16_t rawX = to_i16(pose.x * INCH_TO_INT16);
+    int16_t rawY = to_i16(pose.y * INCH_TO_INT16);
+    int16_t rawH = to_i16(pose.h * DEG_TO_INT16);
 
-std::expected<void, OtosError> set_offset(Pose pose) noexcept {
-    constexpr int ID = 28;
-    // cast
-    int16_t rawX = to_i16(pose.x * kInchToInt16);
-    int16_t rawY = to_i16(pose.y * kInchToInt16);
-    int16_t rawH = to_i16(pose.h * kDegToInt16);
-    // init vector
     std::vector<uint8_t> out(6, 0);
-    // serialize
     out.at(0) = rawX & 0xFF;
     out.at(1) = (rawX >> 8) & 0xFF;
     out.at(2) = rawY & 0xFF;
@@ -319,105 +318,93 @@ std::expected<void, OtosError> set_offset(Pose pose) noexcept {
     out.at(4) = rawH & 0xFF;
     out.at(5) = (rawH >> 8) & 0xFF;
 
-    // write and get response
-    const auto raw = copro::write_and_receive(ID, out, READ_TIMEOUT);
-    if (raw.size() != 1) {
-        return PROS_ERR;
-    } else {
-        return 1;
-    }
+    auto raw = TRY(
+      m_copro.write_and_receive(MessageId::OtosSetOffset, out, READ_TIMEOUT));
+
+    TRY(validate_message(raw, 1));
+
+    return {};
 }
 
-//////////////////////////////////////
-// linear scalar
-/////////////////
+std::expected<float, OtosError> Otos::get_linear_scalar() noexcept {
+    auto raw = TRY(m_copro.write_and_receive(MessageId::OtosGetLinearScalar,
+                                             {},
+                                             READ_TIMEOUT));
 
-std::expected<float, OtosError> get_linear_scalar() noexcept {
-    constexpr int ID = 18;
-    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-    if (raw.size() != 1) {
-        return std::numeric_limits<float>::infinity();
-    }
+    TRY(validate_message(raw, 2));
 
-    return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
+    return 0.001f * static_cast<int8_t>(raw.at(1)) + 1.0f;
 }
 
-std::expected<void, OtosError> set_linear_scalar(float scalar) noexcept {
-    constexpr int ID = 19;
-
+std::expected<void, OtosError> Otos::set_linear_scalar(float scalar) noexcept {
     const float scaled = (scalar - 1.0f) * 1000.0f;
     const std::int8_t raw_i8 = to_i8(scaled);
-    const std::uint8_t raw = std::bit_cast<std::uint8_t>(raw_i8);
+    const std::uint8_t raw_u8 = std::bit_cast<std::uint8_t>(raw_i8);
 
-    const auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
-    if (err.size() != 1) return PROS_ERR;
+    auto raw = TRY(m_copro.write_and_receive(MessageId::OtosSetLinearScalar,
+                                             { raw_u8 },
+                                             READ_TIMEOUT));
 
-    const auto s = get_linear_scalar();
-    if (!std::isfinite(s)) return PROS_ERR; // stronger than s == INFINITY
-    if (std::abs(s - scalar) > 0.02f) return PROS_ERR;
-    return 1;
-}
+    TRY(validate_message(raw, 1));
 
-//////////////////////////////////////
-// angular scalar
-/////////////////
-
-std::expected<float, OtosError> get_angular_scalar() noexcept {
-    constexpr int ID = 20;
-
-    const auto raw = copro::write_and_receive(ID, {}, READ_TIMEOUT);
-
-    if (raw.size() != 1) {
-        return std::numeric_limits<float>::infinity();
+    // Verify
+    auto s = TRY(get_linear_scalar());
+    if (std::abs(s - scalar) > 0.02f) {
+        return std::unexpected(
+          make_otos_error(OtosError::Type::CoproInternalIO,
+                          "SetLinearScalar verification failed"));
     }
 
-    return 0.001f * static_cast<int8_t>(raw.at(0)) + 1.0f;
+    return {};
 }
 
-std::expected<void, OtosError> set_angular_scalar(float scalar) noexcept {
-    constexpr int ID = 21;
+std::expected<float, OtosError> Otos::get_angular_scalar() noexcept {
+    auto raw = TRY(m_copro.write_and_receive(MessageId::OtosGetAngularScalar,
+                                             {},
+                                             READ_TIMEOUT));
 
+    TRY(validate_message(raw, 2));
+
+    return 0.001f * static_cast<int8_t>(raw.at(1)) + 1.0f;
+}
+
+std::expected<void, OtosError> Otos::set_angular_scalar(float scalar) noexcept {
     const float scaled = (scalar - 1.0f) * 1000.0f;
     const std::int8_t raw_i8 = to_i8(scaled);
-    const std::uint8_t raw = std::bit_cast<std::uint8_t>(raw_i8);
+    const std::uint8_t raw_u8 = std::bit_cast<std::uint8_t>(raw_i8);
 
-    const auto err = copro::write_and_receive(ID, { raw }, READ_TIMEOUT);
-    if (err.size() != 1) return PROS_ERR;
+    auto raw = TRY(m_copro.write_and_receive(MessageId::OtosSetAngularScalar,
+                                             { raw_u8 },
+                                             READ_TIMEOUT));
 
-    // check that the angular scalar was actually set
-    const auto s = get_angular_scalar();
-    if (!std::isfinite(s)) return PROS_ERR; // catches +inf, -inf, NaN
-    if (std::abs(s - scalar) > 0.02f) return PROS_ERR;
+    TRY(validate_message(raw, 1));
 
-    return 1;
-}
-
-//////////////////////////////////////
-// calibrate
-/////////////////
-
-std::expected<void, OtosError> calibrate(uint8_t samples) noexcept {
-    constexpr int ID = 25;
-
-    // manually set timeout to 1.5 seconds as calibrate is blocking
-    const auto err = copro::write_and_receive(ID, { samples }, 1500);
-    if (err.size() != 1) {
-        return PROS_ERR;
+    // Verify
+    auto s = TRY(get_angular_scalar());
+    if (std::abs(s - scalar) > 0.02f) {
+        return std::unexpected(
+          make_otos_error(OtosError::Type::CoproInternalIO,
+                          "SetAngularScalar verification failed"));
     }
 
-    return 1;
+    return {};
 }
 
-std::expected<bool, OtosError> is_calibrated() noexcept {
-    constexpr int ID = 26;
+std::expected<void, OtosError> Otos::calibrate(uint8_t samples) noexcept {
+    auto raw = TRY(
+      m_copro.write_and_receive(MessageId::OtosCalibrate, { samples }, 1500));
 
-    const auto err = copro::write_and_receive(ID, {}, READ_TIMEOUT);
+    TRY(validate_message(raw, 1));
 
-    if (err.size() != 1) {
-        return PROS_ERR;
-    }
+    return {};
+}
 
-    return err.at(0);
+std::expected<bool, OtosError> Otos::is_calibrated() noexcept {
+    auto raw = TRY(
+      m_copro.write_and_receive(MessageId::OtosIsCalibrated, {}, READ_TIMEOUT));
+
+    TRY(validate_message(raw, 2));
+    return static_cast<bool>(raw.at(1));
 }
 
 } // namespace otos
