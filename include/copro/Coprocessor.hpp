@@ -58,7 +58,7 @@ class Coprocessor {
      * @param port the smart port number
      * @param baud the baud rate (default 921600 recommended)
      */
-    constexpr Coprocessor(uint8_t port, uint32_t baud) noexcept
+    constexpr Coprocessor(uint8_t port, uint32_t baud = 921600) noexcept
         : m_port(port),
           m_baud(baud) {};
 
