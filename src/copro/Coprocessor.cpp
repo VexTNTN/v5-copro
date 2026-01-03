@@ -4,34 +4,93 @@
 #include "pros/serial.h"
 #include <cerrno>
 #include <format>
-#include <iostream>
+#include <limits>
 
 namespace copro {
 
-namespace { // Internal linkage
+// --- Private Logic Helpers (Internal Linkage) ---
 
-constexpr uint8_t DELIMITER_1 = 0xAA;
-constexpr uint8_t DELIMITER_2 = 0x55;
-constexpr uint8_t ESCAPE = 0xBB;
-static int s_port;
+namespace {
 
-// --- Error Handling Helpers ---
+// Helper to conditionally move the value only if it isn't void
+template<typename T, typename E>
+constexpr auto unwrap(std::expected<T, E>& expected) {
+    if constexpr (std::is_void_v<T>) {
+        return;
+    } else {
+        return std::move(*expected);
+    }
+}
 
-// no device, serial not initialized: ENODEV
-// copro, not initialized: ENODEV
-// motor, not initialized: EADDRINUSE
-// motor, initialized, EADDRINUSE
+// Checks if a PROS API call returned error
+std::expected<void, CoproError> check_pros(int result, int port) {
+    if (result == PROS_ERR) {
+        // We cannot access Coprocessor::make_errno_error easily here without
+        // making it public or duplicating logic.
+        // For simplicity, we implement a quick mapping or just pass errno.
+        // However, to keep the class clean, let's just return void error
+        // and let the caller handle the errno creation using the class method.
+        return std::unexpected(
+          CoproError { CoproError::Type::BrainIoError,
+                       "PROS Error",
+                       { std::source_location::current() } });
+    }
+    return {};
+}
 
-// Helper to convert errno/PROS errors to CoproError
-CoproError
-make_errno_error(std::source_location loc = std::source_location::current()) {
+} // anonymous namespace
+
+// Defines for the TRY macro to work within member functions
+#define TRY(expr)                                            \
+    ({                                                       \
+        auto _res = (expr);                                  \
+        if (!_res.has_value()) {                             \
+            return std::unexpected(                          \
+              trace_error(std::move(_res.error()),           \
+                          std::source_location::current())); \
+        }                                                    \
+        unwrap(_res);                                        \
+    })
+
+// --- CoproError Implementation ---
+
+std::ostream& operator<<(std::ostream& os, const CoproError& err) {
+    os << "[CoproError] Type: ";
+    switch (err.type) {
+        case CoproError::Type::Unknown: os << "Unknown"; break;
+        case CoproError::Type::InvalidPort: os << "InvalidPort"; break;
+        case CoproError::Type::NoDevice: os << "NoDevice"; break;
+        case CoproError::Type::MultipleAccess: os << "MultipleAccess"; break;
+        case CoproError::Type::TimedOut: os << "TimedOut"; break;
+        case CoproError::Type::MessageTooBig: os << "MessageTooBig"; break;
+        case CoproError::Type::BrainIoError: os << "BrainIoError"; break;
+        case CoproError::Type::NoData: os << "NoData"; break;
+        case CoproError::Type::CorruptedRead: os << "CorruptedRead"; break;
+        case CoproError::Type::DataCutOff: os << "DataCutOff"; break;
+        case CoproError::Type::InvalidBaud: os << "InvalidBaud"; break;
+        default: os << "Unknown(" << (int)err.type << ")"; break;
+    }
+    os << " | Msg: \"" << err.what << "\"\n";
+    if (!err.where.empty()) {
+        os << "  Trace:\n";
+        for (const auto& loc : err.where) {
+            os << "    at " << loc.function_name() << " (" << loc.file_name()
+               << ":" << loc.line() << ":" << loc.column() << ")\n";
+        }
+    }
+    return os;
+}
+
+// --- Coprocessor Class Implementation ---
+
+CoproError Coprocessor::make_errno_error(int port, std::source_location loc) {
     CoproError::Type type;
     std::string what;
 
     switch (errno) {
         case EINVAL:
             type = CoproError::Type::InvalidPort;
-            what = std::format("Invalid Port! Found {}", s_port);
+            what = std::format("Invalid Port! Found {}", port);
             break;
         case EACCES:
             type = CoproError::Type::MultipleAccess;
@@ -48,42 +107,21 @@ make_errno_error(std::source_location loc = std::source_location::current()) {
         case EADDRINUSE:
             type = CoproError::Type::InvalidPort;
             what = "Invalid port! Non-V5 device present";
-        default: type = CoproError::Type::Unknown; what = "Unknown error";
+            break;
+        default:
+            type = CoproError::Type::Unknown;
+            what = "Unknown error";
+            break;
     }
     return CoproError { type, std::move(what), { loc } };
 }
 
-// Helper to append source location to an existing error
-CoproError trace_error(CoproError err, std::source_location loc) {
+CoproError Coprocessor::trace_error(CoproError err, std::source_location loc) {
     err.where.push_back(loc);
     return err;
 }
 
-// Helper to conditionally move the value only if it isn't void
-template<typename T, typename E>
-constexpr auto unwrap(std::expected<T, E>& expected) {
-    if constexpr (std::is_void_v<T>) {
-        return; // Do nothing for void
-    } else {
-        return std::move(*expected); // Move the value for non-void
-    }
-}
-
-// MACRO: Unwraps std::expected. If error, returns unexpected.
-// Now uses 'unwrap' to safely handle void types.
-#define TRY(expr)                                            \
-    ({                                                       \
-        auto _res = (expr);                                  \
-        if (!_res.has_value()) {                             \
-            return std::unexpected(                          \
-              trace_error(std::move(_res.error()),           \
-                          std::source_location::current())); \
-        }                                                    \
-        unwrap(_res);                                        \
-    })
-
-// --- CRC16 ---
-uint16_t crc16(const std::vector<uint8_t>& data) {
+uint16_t Coprocessor::crc16(const std::vector<uint8_t>& data) {
     constexpr std::array<uint16_t, 256> table = {
         0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7, 0x8108,
         0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF, 0x1231, 0x0210,
@@ -122,23 +160,49 @@ uint16_t crc16(const std::vector<uint8_t>& data) {
     return crc;
 }
 
-// --- Serial Primitives ---
+std::expected<void, CoproError> Coprocessor::init() noexcept {
+    // Note: m_port is now used instead of s_port
+    int res = pros::c::serial_enable(m_port);
+    if (res == PROS_ERR) return std::unexpected(make_errno_error(m_port));
+    pros::delay(50);
 
-// Checks if a PROS API call returned error, if so, returns unexpected
-std::expected<void, CoproError> check_pros(int result) {
-    if (result == PROS_ERR) {
-        return std::unexpected(make_errno_error());
+    res = pros::c::serial_set_baudrate(m_port, m_baud);
+    if (res == PROS_ERR) return std::unexpected(make_errno_error(m_port));
+    pros::delay(50);
+
+    res = pros::c::serial_flush(m_port);
+    if (res == PROS_ERR) return std::unexpected(make_errno_error(m_port));
+    pros::delay(10);
+
+    // Ping until response
+    while (true) {
+        auto rtn = write_and_receive(MessageId::Ping, {}, 10);
+        if (rtn) {
+            break;
+        }
+
+        // Only retry on specific communication errors
+        auto type = rtn.error().type;
+        bool can_retry = (type == CoproError::Type::TimedOut ||
+                          type == CoproError::Type::NoData ||
+                          type == CoproError::Type::CorruptedRead ||
+                          type == CoproError::Type::DataCutOff);
+
+        if (!can_retry) {
+            return std::unexpected(
+              trace_error(rtn.error(), std::source_location::current()));
+        }
     }
+
     return {};
 }
 
-// Consolidated logic for read/peek
-std::expected<uint8_t, CoproError> serial_byte_op(bool peek) {
+std::expected<uint8_t, CoproError> Coprocessor::serial_byte_op(bool peek) {
     for (int i = 0; i < 2; i++) {
-        int raw = peek ? pros::c::serial_peek_byte(s_port) :
-                         pros::c::serial_read_byte(s_port);
+        int raw = peek ? pros::c::serial_peek_byte(m_port) :
+                         pros::c::serial_read_byte(m_port);
 
-        if (raw == PROS_ERR) return std::unexpected(make_errno_error());
+        if (raw == PROS_ERR) return std::unexpected(make_errno_error(m_port));
         if (raw != -1) return static_cast<uint8_t>(raw);
 
         // wait for new data
@@ -151,16 +215,16 @@ std::expected<uint8_t, CoproError> serial_byte_op(bool peek) {
                    .where = { std::source_location::current() } });
 }
 
-std::expected<uint8_t, CoproError> read_byte() {
+std::expected<uint8_t, CoproError> Coprocessor::read_byte() {
     return serial_byte_op(false);
 }
 
-std::expected<uint8_t, CoproError> peek_byte() {
+std::expected<uint8_t, CoproError> Coprocessor::peek_byte() {
     return serial_byte_op(true);
 }
 
-// Reads exactly N bytes.
-std::expected<std::vector<uint8_t>, CoproError> read_exact(size_t n) {
+std::expected<std::vector<uint8_t>, CoproError>
+Coprocessor::read_exact(size_t n) {
     std::vector<uint8_t> out;
     out.reserve(n);
     for (size_t i = 0; i < n; ++i) {
@@ -169,27 +233,8 @@ std::expected<std::vector<uint8_t>, CoproError> read_exact(size_t n) {
     return out;
 }
 
-// Reads a POD type
-template<typename T>
-std::expected<T, CoproError> read_pod() {
-    static_assert(std::is_trivially_copyable_v<T>);
-    auto bytes = TRY(read_exact(sizeof(T)));
-    std::array<uint8_t, sizeof(T)> raw;
-    std::copy(bytes.begin(), bytes.end(), raw.begin());
-    return std::bit_cast<T>(raw);
-}
-
-/**
- * @brief Write a vector of bytes of the serial port
- *
- * @param message vector of bytes to write
- *
- * @return void on success
- * @return CoproError on failure
- */
-[[nodiscard]]
 std::expected<void, CoproError>
-write(const std::vector<uint8_t>& message) noexcept {
+Coprocessor::write(const std::vector<uint8_t>& message) noexcept {
     // 1. Stuff Payload
     std::vector<uint8_t> payload;
     payload.reserve(message.size());
@@ -217,34 +262,23 @@ write(const std::vector<uint8_t>& message) noexcept {
     auto len_bytes = serialize(static_cast<uint16_t>(payload.size()));
     packet.insert(packet.end(), len_bytes.begin(), len_bytes.end());
 
-    auto crc_bytes =
-      serialize(crc16(message)); // CRC computed on *original* message
+    auto crc_bytes = serialize(crc16(message));
     packet.insert(packet.end(), crc_bytes.begin(), crc_bytes.end());
 
-    // 3. Send Header + Payload (Split writes to match original logic)
-    TRY(
-      check_pros(pros::c::serial_write(s_port, packet.data(), packet.size())));
-    TRY(check_pros(
-      pros::c::serial_write(s_port, payload.data(), payload.size())));
+    // 3. Send Header + Payload
+    if (pros::c::serial_write(m_port, packet.data(), packet.size()) == PROS_ERR)
+        return std::unexpected(make_errno_error(m_port));
+
+    if (pros::c::serial_write(m_port, payload.data(), payload.size()) ==
+        PROS_ERR)
+        return std::unexpected(make_errno_error(m_port));
 
     return {};
 }
 
-/**
- * @brief initialize comms with the coprocessor.
- *
- * @warning this function is blocking
- *
- * @param port the port the coprocessor is on
- * @param baud the baud rate of the serial port. Usually 921600
- * @param timeout max time that can be taken to initialize
- *
- * @return void on success
- * @return CoproError on failure
- */
-std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
-    int avail = pros::c::serial_get_read_avail(s_port);
-    if (avail == PROS_ERR) return std::unexpected(make_errno_error());
+std::expected<std::vector<uint8_t>, CoproError> Coprocessor::read() noexcept {
+    int avail = pros::c::serial_get_read_avail(m_port);
+    if (avail == PROS_ERR) return std::unexpected(make_errno_error(m_port));
     if (avail == 0) {
         return std::unexpected(
           CoproError { CoproError::Type::NoData,
@@ -255,10 +289,8 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
     // 1. Sync to delimiters
     while (true) {
         if (TRY(read_byte()) == DELIMITER_1) {
-            // We use peek here so we don't consume the second byte if it's
-            // WRONG (Preserves it for the next loop iteration)
             if (TRY(peek_byte()) == DELIMITER_2) {
-                TRY(read_byte()); // Consume the valid DELIMITER_2
+                TRY(read_byte());
                 break;
             }
         }
@@ -269,14 +301,10 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
     uint16_t expected_crc = TRY(read_pod<uint16_t>());
 
     // 3. Read Payload
-    // We loop exactly 'length' times (wire bytes), but strictly PEEK first.
     std::vector<uint8_t> data;
     data.reserve(length);
 
     for (int i = 0; i < length; ++i) {
-        // PEEK FIRST: If we see a delimiter here, the Length header was likely
-        // corrupted (too big). Abort immediately to save the delimiter for the
-        // next packet.
         uint8_t b = TRY(peek_byte());
 
         if (b == DELIMITER_1 || b == DELIMITER_2) {
@@ -286,19 +314,15 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
                            { std::source_location::current() } });
         }
 
-        // Safe to consume
         TRY(read_byte());
 
         if (b == ESCAPE) {
-            // Ensure the escaped byte counts towards our wire length limit
             if (++i >= length) {
                 return std::unexpected(
                   CoproError { CoproError::Type::CorruptedRead,
                                "Trailing escape byte",
                                { std::source_location::current() } });
             }
-            // Read the real data (no need to peek, escape guarantees next is
-            // data)
             data.push_back(TRY(read_byte()));
         } else {
             data.push_back(b);
@@ -316,80 +340,11 @@ std::expected<std::vector<uint8_t>, CoproError> read() noexcept {
     return data;
 }
 
-} // anonymous namespace
-
-// --- Public Implementation ---
-
-std::ostream& operator<<(std::ostream& os, const CoproError& err) {
-    os << "[CoproError] Type: ";
-
-    switch (err.type) {
-        case CoproError::Type::Unknown: os << "Unknown"; break;
-        case CoproError::Type::InvalidPort: os << "InvalidPort"; break;
-        case CoproError::Type::NoDevice: os << "NoDevice"; break;
-        case CoproError::Type::MultipleAccess: os << "MultipleAccess"; break;
-        case CoproError::Type::TimedOut: os << "TimedOut"; break;
-        case CoproError::Type::MessageTooBig: os << "MessageTooBig"; break;
-        case CoproError::Type::BrainIoError: os << "BrainIoError"; break;
-        case CoproError::Type::NoData: os << "NoData"; break;
-        case CoproError::Type::CorruptedRead: os << "CorruptedRead"; break;
-        case CoproError::Type::DataCutOff: os << "DataCutOff"; break;
-        case CoproError::Type::InvalidBaud: os << "InvalidBaud"; break;
-        default: os << "Unknown(" << (int)err.type << ")"; break;
-    }
-
-    os << " | Msg: \"" << err.what << "\"\n";
-
-    if (!err.where.empty()) {
-        os << "  Trace:\n";
-        for (const auto& loc : err.where) {
-            os << "    at " << loc.function_name() << " (" << loc.file_name()
-               << ":" << loc.line() << ":" << loc.column()
-               << ")\n"; // Added column here
-        }
-    }
-    return os;
-}
-
-std::expected<void, CoproError> Coprocessor::init(int port, int baud) noexcept {
-    s_port = port;
-
-    TRY(check_pros(pros::c::serial_enable(s_port)));
-    pros::delay(50);
-
-    TRY(check_pros(pros::c::serial_set_baudrate(s_port, baud)));
-    pros::delay(50);
-
-    TRY(check_pros(pros::c::serial_flush(s_port)));
-    pros::delay(10);
-
-    // Ping until response
-    while (true) {
-        auto rtn = write_and_receive(MessageId::Ping, {}, 10);
-        if (rtn) break;
-
-        // Only retry on specific communication errors
-        auto type = rtn.error().type;
-        bool can_retry = (type == CoproError::Type::TimedOut ||
-                          type == CoproError::Type::NoData ||
-                          type == CoproError::Type::CorruptedRead ||
-                          type == CoproError::Type::DataCutOff);
-
-        if (!can_retry) {
-            return std::unexpected(
-              trace_error(rtn.error(), std::source_location::current()));
-        }
-    }
-
-    return {};
-}
-
 std::expected<std::vector<uint8_t>, CoproError>
 Coprocessor::write_and_receive(MessageId id,
                                const std::vector<uint8_t>& data,
                                int timeout,
                                bool silence) noexcept {
-    // this wraps write_and_receive_impl, so we can conditionally print errors
     auto rtn = write_and_receive_impl(id, data, timeout);
     if (!rtn.has_value() && !silence) {
         std::cout << rtn.error() << std::endl;
@@ -402,7 +357,6 @@ Coprocessor::write_and_receive_impl(MessageId id,
                                     const std::vector<uint8_t>& data,
                                     int timeout) noexcept {
 
-    // Prepare packet: [ID] [DATA...]
     std::vector<uint8_t> packet;
     packet.reserve(data.size() + 1);
     packet.push_back(static_cast<uint8_t>(id));
@@ -410,20 +364,16 @@ Coprocessor::write_and_receive_impl(MessageId id,
 
     TRY(write(packet));
 
-    // only try reading while the timeout hasn't been exceeded
     const int start = pros::millis();
     while (pros::millis() < start + timeout) {
         auto raw = read();
         if (raw.has_value()) {
-            if (raw->empty())
-                return {}; // Should not happen based on protocol, but
-                           // safety first
-            // Strip the ID (first byte) from the response
+            if (raw->empty()) return {};
             return std::vector<uint8_t>(raw->begin() + 1, raw->end());
         }
 
         if (raw.error().type == CoproError::Type::NoData) {
-            pros::delay(1); // Yield to prevent tight loop burning CPU
+            pros::delay(1);
             continue;
         }
 

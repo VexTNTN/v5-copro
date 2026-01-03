@@ -1,51 +1,16 @@
 #pragma once
 
 #include <algorithm>
-#include <atomic>
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <expected>
+#include <iostream>
 #include <source_location>
 #include <string>
 #include <vector>
 
 namespace copro {
-
-/**
- * @brief Serialize a trivially copyable type into a vector of bytes
- *
- * @tparam T the datatype
- *
- * @param data the data to serialize
- *
- * @return std::vector<uint8_t> the serialized data
- */
-template<typename T>
-    requires std::is_trivially_copyable_v<T>
-static std::vector<uint8_t> serialize(const T& data) {
-    auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
-    return { raw.begin(), raw.end() };
-}
-
-/**
- * @brief Deserialize a vector of bytes into a type
- *
- * @tparam T the datatype
- * @tparam N the size of the datatype in bytes
- *
- * @param data the data to deserialize
- *
- * @return T the deserialized data
- */
-template<typename T>
-    requires std::is_trivially_copyable_v<T>
-static T deserialize(const std::vector<uint8_t>& data) {
-    // Ensure we don't read out of bounds (basic safety check)
-    if (data.size() < sizeof(T)) return T {};
-
-    std::array<uint8_t, sizeof(T)> raw;
-    std::copy_n(data.begin(), sizeof(T), raw.begin());
-    return std::bit_cast<T>(raw);
-}
 
 enum class MessageId : uint8_t {
     Ping = 0,
@@ -83,51 +48,33 @@ struct CoproError {
     std::vector<std::source_location> where;
 };
 
-// enable printing CoproError using std::cout
+// Enable printing CoproError using std::cout
 std::ostream& operator<<(std::ostream& os, const CoproError& err);
 
 class Coprocessor {
   public:
     /**
-     * @brief Create a Coprocessor instance on a port with a specific baud rate.
-     * Non-blocking.
-     *
-     * @note baud rate must be 9600, 19200, 38400, 57600, 115200, 230400,
-     * 460800, or 921600
-     *
-     * @param port the smart port the Coprocessor is on
-     * @param baud the baud rate the serial stream should run on
+     * @brief Create a Coprocessor instance.
+     * @param port the smart port number
+     * @param baud the baud rate (default 921600 recommended)
      */
     constexpr Coprocessor(uint8_t port, uint32_t baud) noexcept
-        : port(port),
-          baud(baud) {};
+        : m_port(port),
+          m_baud(baud) {};
+
+    // Delete copy to prevent hardware resource contention issues
+    Coprocessor(const Coprocessor&) = delete;
+    Coprocessor& operator=(const Coprocessor&) = delete;
 
     /**
-     * @brief initialize the coprocessor
-     *
-     * This function configures a smart port to be a generic serial port,
-     * and performs a simple handshake with the coprocessor. It blocks
-     * until the handshake is complete
-     *
-     * @param port
-     * @param baud
-     * @return std::expected<void, CoproError>
+     * @brief Initialize the coprocessor serial port.
+     * Blocks until handshake is complete.
      */
     [[nodiscard]]
-    std::expected<void, CoproError> init(int port, int baud) noexcept;
-
-    [[nodiscard]]
-    bool is_initialized() noexcept;
+    std::expected<void, CoproError> init() noexcept;
 
     /**
-     * @brief Write a message to the coprocessor and wait for a response
-     *
-     * @param id the message ID
-     * @param data the payload data
-     * @param timeout how long to wait for a response, in milliseconds
-     *
-     * @return std::vector<uint8_t> the response payload on success
-     * @return CoproError on failure
+     * @brief Write a message to the coprocessor and wait for a response.
      */
     [[nodiscard]]
     std::expected<std::vector<uint8_t>, CoproError>
@@ -136,20 +83,61 @@ class Coprocessor {
                       int timeout,
                       bool silence = false) noexcept;
 
-    constexpr ~Coprocessor() = delete ("Should never need to be destroyed");
-    constexpr Coprocessor(Coprocessor&) =
-      delete ("should never need to be copied");
-    constexpr Coprocessor(const Coprocessor&) =
-      delete ("should never beed to be copied");
-
   private:
+    // --- Member Variables ---
+    const uint8_t m_port;
+    const uint32_t m_baud;
+
+    // --- Constants ---
+    static constexpr uint8_t DELIMITER_1 = 0xAA;
+    static constexpr uint8_t DELIMITER_2 = 0x55;
+    static constexpr uint8_t ESCAPE = 0xBB;
+
+    // --- Private Implementation Helpers ---
+
     [[nodiscard]]
     std::expected<std::vector<uint8_t>, CoproError>
     write_and_receive_impl(MessageId id,
                            const std::vector<uint8_t>& data,
                            int timeout) noexcept;
-    std::atomic<bool> initialized;
-    uint8_t port;
-    const uint32_t baud;
+
+    // Low-level IO
+    std::expected<void, CoproError>
+    write(const std::vector<uint8_t>& message) noexcept;
+    std::expected<std::vector<uint8_t>, CoproError> read() noexcept;
+
+    // Serial Primitives
+    std::expected<uint8_t, CoproError> serial_byte_op(bool peek);
+    std::expected<uint8_t, CoproError> read_byte();
+    std::expected<uint8_t, CoproError> peek_byte();
+    std::expected<std::vector<uint8_t>, CoproError> read_exact(size_t n);
+
+    // Static Pure Logic Helpers
+    static uint16_t crc16(const std::vector<uint8_t>& data);
+    static CoproError make_errno_error(
+      int current_port,
+      std::source_location loc = std::source_location::current());
+    static CoproError trace_error(CoproError err, std::source_location loc);
+
+    // --- Template Helpers ---
+
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    static std::vector<uint8_t> serialize(const T& data) {
+        auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
+        return { raw.begin(), raw.end() };
+    }
+
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    std::expected<T, CoproError> read_pod() {
+        auto bytes_res = read_exact(sizeof(T));
+        if (!bytes_res) return std::unexpected(bytes_res.error());
+
+        std::array<uint8_t, sizeof(T)> raw;
+        std::copy(bytes_res->begin(), bytes_res->end(), raw.begin());
+        return std::bit_cast<T>(raw);
+    }
 };
+
 } // namespace copro
