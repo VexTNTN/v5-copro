@@ -7,9 +7,8 @@
 #include <limits>
 
 using copro::CoproError;
-using copro::MessageId;
 
-namespace otos {
+namespace copro {
 
 // --- OtosError Implementation ---
 
@@ -407,4 +406,4 @@ std::expected<bool, OtosError> Otos::is_calibrated() noexcept {
     return static_cast<bool>(raw.at(1));
 }
 
-} // namespace otos
+} // namespace copro

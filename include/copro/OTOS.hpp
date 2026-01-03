@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace otos {
+namespace copro {
 
 struct OtosError {
     enum class Type {
@@ -56,7 +56,7 @@ class Otos {
     // Disable copy/move/destroy
     Otos(const Otos&) = delete;
     Otos& operator=(const Otos&) = delete;
-    ~Otos() = delete;
+    // ~Otos() = delete;
 
     [[nodiscard]]
     std::expected<Status, OtosError> get_status() noexcept;
@@ -116,4 +116,4 @@ class Otos {
     validate_message(const std::vector<uint8_t>& message, size_t expected_len);
 };
 
-} // namespace otos
+} // namespace copro
