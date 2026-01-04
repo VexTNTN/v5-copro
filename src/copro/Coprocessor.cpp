@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <format>
 #include <limits>
+#include <mutex>
 #include <ranges>
 
 namespace copro {
@@ -345,6 +346,7 @@ std::expected<std::vector<uint8_t>, CoproError>
 Coprocessor::write_and_receive_impl(MessageId id,
                                     const std::vector<uint8_t>& data,
                                     int timeout) noexcept {
+    std::lock_guard lock(m_mutex);
 
     std::vector<uint8_t> packet;
     packet.reserve(data.size() + 1);

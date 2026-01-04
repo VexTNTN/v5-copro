@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pros/rtos.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -89,6 +90,7 @@ class Coprocessor {
     // --- Member Variables ---
     const uint8_t m_port;
     const uint32_t m_baud;
+    pros::Mutex m_mutex;
 
     // --- Constants ---
     static constexpr uint8_t DELIMITER_1 = 0xAA;
