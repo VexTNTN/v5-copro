@@ -35,9 +35,9 @@ struct Measurement {
     uint64_t micros; // estimated time at which the measurement was taken
 };
 
-int start(Id id) noexcept;
-int stop(Id id) noexcept;
-int reset(Id id) noexcept;
-Health getHealth(Id id) noexcept;
-Measurement getMeasurement() noexcept;
+int start(Id id);
+int stop(Id id);
+int reset(Id id);
+Health getHealth(Id id);
+Measurement getMeasurement();
 }; // namespace lidar

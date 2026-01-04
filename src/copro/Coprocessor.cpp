@@ -219,7 +219,7 @@ Coprocessor::cobs_decode(const std::vector<uint8_t>& data) {
     return decoded;
 }
 
-std::expected<void, CoproError> Coprocessor::init() noexcept {
+std::expected<void, CoproError> Coprocessor::init() {
     // Note: m_port is now used instead of s_port
     int res = pros::c::serial_enable(m_port);
     if (res == PROS_ERR) return std::unexpected(make_errno_error(m_port));
@@ -273,7 +273,7 @@ Coprocessor::read_exact(size_t n) {
 }
 
 std::expected<void, CoproError>
-Coprocessor::write(const std::vector<uint8_t>& message) noexcept {
+Coprocessor::write(const std::vector<uint8_t>& message) {
     // 1. Build Payload [CRC][Message]
     std::vector<uint8_t> payload;
     payload.reserve(message.size() + 2);
@@ -298,7 +298,7 @@ Coprocessor::write(const std::vector<uint8_t>& message) noexcept {
     return {};
 }
 
-std::expected<std::vector<uint8_t>, CoproError> Coprocessor::read() noexcept {
+std::expected<std::vector<uint8_t>, CoproError> Coprocessor::read() {
     int avail = pros::c::serial_get_read_avail(m_port);
     if (avail == PROS_ERR) return std::unexpected(make_errno_error(m_port));
     // Do not return NoData immediately; allow read_byte loop to try at least
@@ -359,7 +359,7 @@ std::expected<std::vector<uint8_t>, CoproError>
 Coprocessor::write_and_receive(MessageId id,
                                const std::vector<uint8_t>& data,
                                int timeout,
-                               bool silence) noexcept {
+                               bool silence) {
     auto rtn = write_and_receive_impl(id, data, timeout);
     if (!rtn.has_value() && !silence) {
         std::cout << rtn.error() << std::endl;
@@ -370,7 +370,7 @@ Coprocessor::write_and_receive(MessageId id,
 std::expected<std::vector<uint8_t>, CoproError>
 Coprocessor::write_and_receive_impl(MessageId id,
                                     const std::vector<uint8_t>& data,
-                                    int timeout) noexcept {
+                                    int timeout) {
     std::lock_guard lock(m_mutex);
 
     std::vector<uint8_t> packet;
