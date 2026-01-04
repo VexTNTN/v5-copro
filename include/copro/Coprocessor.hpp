@@ -93,9 +93,7 @@ class Coprocessor {
     pros::Mutex m_mutex;
 
     // --- Constants ---
-    static constexpr uint8_t DELIMITER_1 = 0xAA;
-    static constexpr uint8_t DELIMITER_2 = 0x55;
-    static constexpr uint8_t ESCAPE = 0xBB;
+    static constexpr uint8_t COBS_DELIMITER = 0x00;
 
     // --- Private Implementation Helpers ---
 
@@ -118,6 +116,9 @@ class Coprocessor {
 
     // Static Pure Logic Helpers
     static uint16_t crc16(const std::vector<uint8_t>& data);
+    static std::vector<uint8_t> cobs_encode(const std::vector<uint8_t>& data);
+    static std::vector<uint8_t> cobs_decode(const std::vector<uint8_t>& data);
+
     static CoproError make_errno_error(
       int current_port,
       std::source_location loc = std::source_location::current());
