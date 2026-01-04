@@ -5,6 +5,7 @@
 #include <format>
 #include <iostream>
 #include <limits>
+#include <ranges>
 
 using copro::CoproError;
 
@@ -12,17 +13,45 @@ namespace copro {
 
 // --- OtosError Implementation ---
 
+#include <iostream>
+#include <ranges> // Required for std::views::reverse
+
 std::ostream& operator<<(std::ostream& os, const OtosError& err) {
-    os << "[OtosError] Type: " << (int)err.type << " | Msg: \"" << err.what
-       << "\"\n";
+    os << "[OtosError] Type: ";
+    switch (err.type) {
+        case OtosError::Type::None: os << "None"; break;
+        case OtosError::Type::CoproInternalIO: os << "CoproInternalIO"; break;
+        case OtosError::Type::CoproInternalUnknown:
+            os << "CoproInternalUnknown";
+            break;
+        case OtosError::Type::EmptyResponse: os << "EmptyResponse"; break;
+        case OtosError::Type::CorruptedResponse:
+            os << "CorruptedResponse";
+            break;
+        case OtosError::Type::NoResponse: os << "NoResponse"; break;
+        case OtosError::Type::WrongMessageLength:
+            os << "WrongMessageLength";
+            break;
+        case OtosError::Type::TransportError: os << "TransportError"; break;
+        default: os << "Unknown(" << (int)err.type << ")"; break;
+    }
+
+    os << " | Msg: \"" << err.what << "\"\n";
+
     if (!err.where.empty()) {
         os << "  Trace:\n";
-        for (const auto& loc : err.where) {
+        // Using std::views::reverse since std::source_location implies C++20
+        for (const auto& loc : std::views::reverse(err.where)) {
             os << "    at " << loc.function_name() << " (" << loc.file_name()
-               << ":" << loc.line() << ")\n";
+               << ":" << loc.line() << ":" << loc.column() << ")\n";
         }
     }
     return os;
+}
+
+void print_error(OtosError& error, std::source_location loc) {
+    error.where.push_back(loc);
+    std::cout << error << std::endl;
 }
 
 namespace { // Internal Linkage
@@ -302,27 +331,6 @@ std::expected<Acceleration, OtosError> Otos::get_acceleration() noexcept {
     return Acceleration { rawX * INT16_TO_MPSS * METER_TO_INCH,
                           rawY * INT16_TO_MPSS * METER_TO_INCH,
                           static_cast<float>(rawH * INT16_TO_RPSS / 360.0) };
-}
-
-std::expected<void, OtosError> Otos::set_offset(Pose pose) noexcept {
-    int16_t rawX = to_i16(pose.x * INCH_TO_INT16);
-    int16_t rawY = to_i16(pose.y * INCH_TO_INT16);
-    int16_t rawH = to_i16(pose.h * DEG_TO_INT16);
-
-    std::vector<uint8_t> out(6, 0);
-    out.at(0) = rawX & 0xFF;
-    out.at(1) = (rawX >> 8) & 0xFF;
-    out.at(2) = rawY & 0xFF;
-    out.at(3) = (rawY >> 8) & 0xFF;
-    out.at(4) = rawH & 0xFF;
-    out.at(5) = (rawH >> 8) & 0xFF;
-
-    auto raw = TRY(
-      m_copro.write_and_receive(MessageId::OtosSetOffset, out, READ_TIMEOUT));
-
-    TRY(validate_message(raw, 1));
-
-    return {};
 }
 
 std::expected<float, OtosError> Otos::get_linear_scalar() noexcept {

@@ -20,7 +20,6 @@ enum class MessageId : uint8_t {
     OtosGetPose = 7,
     OtosSetPose = 8,
     OtosGetAccel = 12,
-    OtosSetOffset = 28,
     OtosGetLinearScalar = 18,
     OtosSetLinearScalar = 19,
     OtosGetAngularScalar = 20,
@@ -50,6 +49,9 @@ struct CoproError {
 
 // Enable printing CoproError using std::cout
 std::ostream& operator<<(std::ostream& os, const CoproError& err);
+
+void print_error(CoproError& error,
+                 std::source_location loc = std::source_location::current());
 
 class Coprocessor {
   public:

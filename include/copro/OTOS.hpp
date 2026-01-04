@@ -29,6 +29,9 @@ struct OtosError {
 // Enable printing OtosError using std::cout if needed
 std::ostream& operator<<(std::ostream& os, const OtosError& err);
 
+void print_error(OtosError& error,
+                 std::source_location loc = std::source_location::current());
+
 struct Pose {
     float x;
     float y;
@@ -77,10 +80,6 @@ class Otos {
     // --- Acceleration ---
     [[nodiscard]]
     std::expected<Acceleration, OtosError> get_acceleration() noexcept;
-
-    // --- Offset ---
-    [[nodiscard]]
-    std::expected<void, OtosError> set_offset(Pose pose) noexcept;
 
     // --- Linear Scalar ---
     [[nodiscard]]

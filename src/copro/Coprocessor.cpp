@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <format>
 #include <limits>
+#include <ranges>
 
 namespace copro {
 
@@ -71,14 +72,22 @@ std::ostream& operator<<(std::ostream& os, const CoproError& err) {
         default: os << "Unknown(" << (int)err.type << ")"; break;
     }
     os << " | Msg: \"" << err.what << "\"\n";
+
     if (!err.where.empty()) {
         os << "  Trace:\n";
-        for (const auto& loc : err.where) {
+        // Iterate in reverse
+        for (const auto& loc : std::views::reverse(err.where)) {
             os << "    at " << loc.function_name() << " (" << loc.file_name()
-               << ":" << loc.line() << ":" << loc.column() << ")\n";
+               << ":" << loc.line() << ":" << loc.column() << ":"
+               << loc.column() << ")\n";
         }
     }
     return os;
+}
+
+void print_error(CoproError& error, std::source_location loc) {
+    error.where.push_back(loc);
+    std::cout << error << std::endl;
 }
 
 // --- Coprocessor Class Implementation ---
