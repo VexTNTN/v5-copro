@@ -195,6 +195,7 @@ Coprocessor::cobs_encode(const std::vector<uint8_t>& data) {
             result.push_back(0);
         }
     }
+
     result.at(code_index) = code;
     return result;
 }
@@ -204,14 +205,16 @@ Coprocessor::cobs_decode(const std::vector<uint8_t>& data) {
     std::vector<uint8_t> decoded;
     decoded.reserve(data.size());
     size_t i = 0;
+
     while (i < data.size()) {
-        uint8_t code = data[i++];
+        uint8_t code = data.at(i++);
         if (code == 0) break; // Should not happen in valid COBS frame
 
         for (uint8_t j = 1; j < code; j++) {
             if (i >= data.size()) break;
-            decoded.push_back(data[i++]);
+            decoded.push_back(data.at(i++));
         }
+
         if (code < 0xFF && i < data.size()) {
             decoded.push_back(0);
         }
