@@ -28,6 +28,12 @@ void initialize() {
         return;
     }
 
+    // wait until coprocessor has booted
+    while (
+      !coprocessor.write_and_receive(copro::MessageId::Ping, {}, 100, true)) {}
+    printf("handshake completed in %.3f\n", (pros::micros() - start) / 1000.0f);
+    start = pros::micros();
+
     if (auto rtn = otos.set_linear_scalar(0.9)) {
         printf("set linear finished in: %.3f\n",
                (pros::micros() - start) / 1000.0f);
