@@ -3,6 +3,9 @@
 #include "copro/OTOS.hpp"
 #include "pros/apix.h" // IWYU pragma: keep
 
+copro::Coprocessor coprocessor(21);
+copro::Otos otos(coprocessor);
+
 void initialize() {
     // uncomment to disable stream multiplexing and COBS, so cargo-v5 can read
     // the terminal
@@ -17,61 +20,122 @@ void initialize() {
     // initialize comms with coprocessor (blocking)
     auto start = pros::micros();
 
-    copro::init(8, 921600);
-    std::cout << "success!" << std::endl;
-    printf("init finished in: %.3f\n", (pros::micros() - start) / 1000.0f);
+    if (auto rtn = coprocessor.init()) {
+        printf("init finished in: %.3f\n", (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
+
+    // wait until coprocessor has booted
+    while (
+      !coprocessor.write_and_receive(copro::MessageId::Ping, {}, 100, true)) {}
+    printf("handshake completed in %.3f\n", (pros::micros() - start) / 1000.0f);
     start = pros::micros();
 
-    otos::set_linear_scalar(0.9);
-    printf("set linear finished in: %.3f\n",
-           (pros::micros() - start) / 1000.0f);
-    start = pros::micros();
+    if (auto rtn = otos.set_linear_scalar(0.9)) {
+        printf("set linear finished in: %.3f\n",
+               (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
-    otos::set_angular_scalar(0.9);
-    printf("set angular finished in: %.3f\n",
-           (pros::micros() - start) / 1000.0f);
-    start = pros::micros();
+    if (auto rtn = otos.set_angular_scalar(0.9)) {
+        printf("set angular finished in: %.3f\n",
+               (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
-    otos::calibrate(255);
-    printf("calibrate finished in: %.3f\n", (pros::micros() - start) / 1000.0f);
+    if (auto rtn = otos.calibrate(255)) {
+        printf("calibrate finished in: %.3f\n",
+               (pros::micros() - start) / 1000.0f);
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
     pros::delay(1000);
     start = pros::micros();
 
-    otos::resetTracking();
-    printf("reset finished in: %.3f\n", (pros::micros() - start) / 1000.0f);
-    start = pros::micros();
+    if (auto rtn = otos.reset_tracking()) {
+        printf("reset finished in: %.3f\n", (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
-    otos::set_pose({ 0, 0, 0 });
-    printf("set_pose finished in: %.3f\n", (pros::micros() - start) / 1000.0f);
-    start = pros::micros();
+    if (auto rtn = otos.set_pose({ 0, 0, 0 })) {
+        printf("set_pose finished in: %.3f\n",
+               (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
-    auto p = otos::get_pose();
-    printf("get_pose finished in: %.3f\n", (pros::micros() - start) / 1000.0f);
-    start = pros::micros();
+    if (auto rtn = otos.get_pose()) {
+        printf("get_pose finished in: %.3f\n",
+               (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
-    printf("is calibrated: %d\n", otos::isCalibrated());
-    printf("is calibrated finished in: %.3f\n",
-           (pros::micros() - start) / 1000.0f);
-    start = pros::micros();
-    printf("AS: %.3f, LS: %.3f\n",
-           otos::get_angular_scalar(),
-           otos::get_linear_scalar());
+    if (auto rtn = otos.is_calibrated()) {
+        printf("is calibrated: %d\n", rtn.value());
+        printf("is calibrated finished in: %.3f\n",
+               (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
-    auto a = otos::get_acceleration();
-    printf("get_acceleration: x: %.2f, y: %.2f, h: %.2f\n", a.x, a.y, a.h);
-    printf("get_acceleration finished in: %.3f\n",
-           (pros::micros() - start) / 1000.0f);
-    start = pros::micros();
+    if (auto rtn = otos.get_angular_scalar()) {
+        printf("AS: %.3f", rtn.value());
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
-    otos::set_offset({0,0,0});
+    if (auto rtn = otos.get_linear_scalar()) {
+        printf(", LS: %.3f\n", rtn.value());
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
+
+    if (auto rtn = otos.get_acceleration()) {
+        printf("get_acceleration: x: %.2f, y: %.2f, h: %.2f\n",
+               rtn->x,
+               rtn->y,
+               rtn->h);
+        printf("get_acceleration finished in: %.3f\n",
+               (pros::micros() - start) / 1000.0f);
+        start = pros::micros();
+    } else {
+        copro::print_error(rtn.error());
+        return;
+    }
 
     // print acceleration data along the x axis every second
     while (true) {
-        auto p = otos::get_pose();
-        printf("x: %.2f, y: %.2f, h: %.2f\n", p.x, p.y, p.h);
-        //auto a = otos::get_acceleration();
-        //printf("a: x: %6.2f, y: %6.2f, h: %6.2f\n", a.x, a.y, a.h);
+        if (auto rtn = otos.get_pose()) {
+            printf("x: %.2f, y: %.2f, h: %.2f\n", rtn->x, rtn->y, rtn->h);
+        } else {
+            copro::print_error(rtn.error());
+        }
+
+        // auto a = otos::get_acceleration();
+        // printf("a: x: %6.2f, y: %6.2f, h: %6.2f\n", a.x, a.y, a.h);
         pros::delay(50);
     }
 }

@@ -1,8 +1,37 @@
 #pragma once
 
+#include "Coprocessor.hpp"
+#include <cmath>
 #include <cstdint>
+#include <expected>
+#include <source_location>
+#include <string>
+#include <vector>
 
-namespace otos {
+namespace copro {
+
+struct OtosError {
+    enum class Type {
+        None,
+        CoproInternalIO,
+        CoproInternalUnknown,
+        EmptyResponse,
+        CorruptedResponse,
+        NoResponse,
+        WrongMessageLength,
+        TransportError // Added to cover specific serial port issues
+    } type;
+
+    std::string what;
+    std::vector<std::source_location> where;
+};
+
+// Enable printing OtosError using std::cout if needed
+std::ostream& operator<<(std::ostream& os, const OtosError& err);
+
+void print_error(OtosError& error,
+                 std::source_location loc = std::source_location::current());
+
 struct Pose {
     float x;
     float y;
@@ -16,56 +45,74 @@ struct Status {
     bool warn_optical_tracking;
     bool optical_fatal;
     bool imu_fatal;
-    bool pros_error;
 };
 
-Status getStatus() noexcept;
+class Otos {
+  public:
+    /**
+     * @brief Construct a new Otos device handler
+     * @param copro Reference to the initialized Coprocessor instance
+     */
+    explicit Otos(copro::Coprocessor& copro)
+        : m_copro(copro) {}
 
-int selfTest() noexcept;
+    // Disable copy/move/destroy
+    Otos(const Otos&) = delete;
+    Otos& operator=(const Otos&) = delete;
+    // ~Otos() = delete;
 
-int resetTracking() noexcept;
+    [[nodiscard]]
+    std::expected<Status, OtosError> get_status() noexcept;
 
-//////////////////////////////////////
-// pose
-/////////////////
+    [[nodiscard]]
+    std::expected<bool, OtosError> self_test() noexcept;
 
-Pose get_pose() noexcept;
+    [[nodiscard]]
+    std::expected<void, OtosError> reset_tracking() noexcept;
 
-int set_pose(Pose pose) noexcept;
+    // --- Pose ---
+    [[nodiscard]]
+    std::expected<Pose, OtosError> get_pose() noexcept;
 
-//////////////////////////////////////
-// acceleration
-/////////////////
+    [[nodiscard]]
+    std::expected<void, OtosError> set_pose(Pose pose) noexcept;
 
-Acceleration get_acceleration() noexcept;
+    // --- Acceleration ---
+    [[nodiscard]]
+    std::expected<Acceleration, OtosError> get_acceleration() noexcept;
 
-//////////////////////////////////////
-// offset
-/////////////////
+    // --- Linear Scalar ---
+    [[nodiscard]]
+    std::expected<float, OtosError> get_linear_scalar() noexcept;
 
-int set_offset(Pose pose) noexcept;
+    [[nodiscard]]
+    std::expected<void, OtosError> set_linear_scalar(float scalar) noexcept;
 
-//////////////////////////////////////
-// linear scalar
-/////////////////
+    // --- Angular Scalar ---
+    [[nodiscard]]
+    std::expected<float, OtosError> get_angular_scalar() noexcept;
 
-float get_linear_scalar() noexcept;
+    [[nodiscard]]
+    std::expected<void, OtosError> set_angular_scalar(float scalar) noexcept;
 
-int set_linear_scalar(float scalar) noexcept;
+    // --- Calibration ---
+    [[nodiscard]]
+    std::expected<void, OtosError> calibrate(uint8_t samples) noexcept;
 
-//////////////////////////////////////
-// angular scalar
-/////////////////
+    [[nodiscard]]
+    std::expected<bool, OtosError> is_calibrated() noexcept;
 
-float get_angular_scalar() noexcept;
+  private:
+    copro::Coprocessor& m_copro;
 
-int set_angular_scalar(float scalar) noexcept;
+    // --- Internal Helpers ---
+    enum class CoproStatus : std::uint8_t {
+        Ok = 0,
+        IoError = 2,
+    };
 
-//////////////////////////////////////
-// calibrate
-/////////////////
+    static std::expected<void, OtosError>
+    validate_message(const std::vector<uint8_t>& message, size_t expected_len);
+};
 
-int calibrate(uint8_t samples) noexcept;
-
-int isCalibrated() noexcept;
-} // namespace otos
+} // namespace copro

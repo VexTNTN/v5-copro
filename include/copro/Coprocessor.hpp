@@ -1,114 +1,147 @@
 #pragma once
 
+#include "pros/rtos.hpp"
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <cstdint>
+#include <expected>
+#include <iostream>
+#include <source_location>
+#include <string>
 #include <vector>
 
 namespace copro {
 
-/**
- * @brief Serialize a trivially copyable type into a vector of bytes
- *
- * @tparam T the datatype
- *
- * @param data the data to serialize
- *
- * @return std::vector<uint8_t> the serialized data
- */
-template<typename T>
-static std::vector<uint8_t> serialize(const T& data) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
-    auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
-    std::vector<uint8_t> out(sizeof(T));
-    for (int i = 0; i < sizeof(T); ++i) {
-        out.at(i) = raw.at(i);
+enum class MessageId : uint8_t {
+    Ping = 0,
+    GetOtosStatus = 1,
+    OtosSelfTest = 24,
+    OtosResetTracking = 3,
+    OtosGetPose = 7,
+    OtosSetPose = 8,
+    OtosGetAccel = 12,
+    OtosGetLinearScalar = 18,
+    OtosSetLinearScalar = 19,
+    OtosGetAngularScalar = 20,
+    OtosSetAngularScalar = 21,
+    OtosCalibrate = 25,
+    OtosIsCalibrated = 26
+};
+
+struct CoproError {
+    enum class Type {
+        Unknown,
+        InvalidPort,
+        NoDevice,
+        MultipleAccess,
+        TimedOut,
+        MessageTooBig,
+        BrainIoError,
+        NoData,
+        CorruptedRead,
+        DataCutOff,
+        InvalidBaud,
+    } type;
+
+    std::string what;
+    std::vector<std::source_location> where;
+};
+
+// Enable printing CoproError using std::cout
+std::ostream& operator<<(std::ostream& os, const CoproError& err);
+
+void print_error(CoproError& error,
+                 std::source_location loc = std::source_location::current());
+
+class Coprocessor {
+  public:
+    /**
+     * @brief Create a Coprocessor instance.
+     * @param port the smart port number
+     * @param baud the baud rate (default 921600 recommended)
+     */
+    constexpr Coprocessor(uint8_t port, uint32_t baud = 921600) noexcept
+        : m_port(port),
+          m_baud(baud) {};
+
+    // Delete copy to prevent hardware resource contention issues
+    Coprocessor(const Coprocessor&) = delete;
+    Coprocessor& operator=(const Coprocessor&) = delete;
+
+    /**
+     * @brief Initialize the coprocessor serial port.
+     * Blocks shortly. Does not perform handshake
+     */
+    [[nodiscard]]
+    std::expected<void, CoproError> init() noexcept;
+
+    /**
+     * @brief Write a message to the coprocessor and wait for a response.
+     */
+    [[nodiscard]]
+    std::expected<std::vector<uint8_t>, CoproError>
+    write_and_receive(MessageId id,
+                      const std::vector<uint8_t>& data,
+                      int timeout,
+                      bool silence = false) noexcept;
+
+  private:
+    // --- Member Variables ---
+    const uint8_t m_port;
+    const uint32_t m_baud;
+    pros::Mutex m_mutex;
+
+    // --- Constants ---
+    static constexpr uint8_t DELIMITER_1 = 0xAA;
+    static constexpr uint8_t DELIMITER_2 = 0x55;
+    static constexpr uint8_t ESCAPE = 0xBB;
+
+    // --- Private Implementation Helpers ---
+
+    [[nodiscard]]
+    std::expected<std::vector<uint8_t>, CoproError>
+    write_and_receive_impl(MessageId id,
+                           const std::vector<uint8_t>& data,
+                           int timeout) noexcept;
+
+    // Low-level IO
+    std::expected<void, CoproError>
+    write(const std::vector<uint8_t>& message) noexcept;
+    std::expected<std::vector<uint8_t>, CoproError> read() noexcept;
+
+    // Serial Primitives
+    std::expected<uint8_t, CoproError> serial_byte_op(bool peek);
+    std::expected<uint8_t, CoproError> read_byte();
+    std::expected<uint8_t, CoproError> peek_byte();
+    std::expected<std::vector<uint8_t>, CoproError> read_exact(size_t n);
+
+    // Static Pure Logic Helpers
+    static uint16_t crc16(const std::vector<uint8_t>& data);
+    static CoproError make_errno_error(
+      int current_port,
+      std::source_location loc = std::source_location::current());
+    static CoproError trace_error(CoproError err, std::source_location loc);
+
+    // --- Template Helpers ---
+
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    static std::vector<uint8_t> serialize(const T& data) {
+        auto raw = std::bit_cast<std::array<uint8_t, sizeof(T)>>(data);
+        return { raw.begin(), raw.end() };
     }
-    return out;
-}
 
-/**
- * @brief Deserialize a vector of bytes into a type
- *
- * @tparam T the datatype
- * @tparam N the size of the datatype in bytes
- *
- * @param data the data to deserialize
- *
- * @return T the deserialized data
- */
-template<typename T, int N>
-static T deserialize(const std::vector<uint8_t>& data) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable");
-    std::array<uint8_t, N> raw;
-    for (int i = 0; i < N; ++i) {
-        raw.at(i) = data.at(i);
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    std::expected<T, CoproError> read_pod() {
+        auto bytes_res = read_exact(sizeof(T));
+        if (!bytes_res) return std::unexpected(bytes_res.error());
+
+        std::array<uint8_t, sizeof(T)> raw;
+        std::copy(bytes_res->begin(), bytes_res->end(), raw.begin());
+        return std::bit_cast<T>(raw);
     }
-    return std::bit_cast<T>(raw);
-}
+};
 
-/**
- * @brief initialize comms with the coprocessor.
- *
- * This function will block until the coprocessor responds to a ping.
- * However, if driver control starts at any point, this function will
- * exit with an error
- *
- * the function may set the following values of errno:
- * EINVAL: the port is not in a valid range [1-21]
- * EACCESS: another resource is currently trying to access the port
- * EINTR: driver control started while initializing
- * ETIMEDOUT: could not communicate with pi before timeout ended
- *
- * @param port the port the coprocessor is on
- * @param baud the baud rate of the serial port. Usually 921600
- * @param timeout max time that can be taken to initialize, in milliseconds. -1
- * to disable. -1 by default
- */
-int init(int port, int baud, int timeout = -1);
-
-/**
- * @brief Write a vector of bytes of the serial port
- *
- * This function may throw an std::system_error exception,
- * with one of the following error codes
- *
- * EOVERFLOW - the message is too large to send
- * EINVAL - The given value is not within the range of V5 ports (1-21).
- * EACCES - Another resource is currently trying to access the port.
- * EIO - "Serious" internal write error.
- *
- * @param message
- */
-void write(const std::vector<uint8_t>& message);
-
-/**
- * @brief Read a packet, parse it, and return the message
- *
- * This function may throw an std::system_error exception,
- * with one of the following error codes:
- *
- * EINVAL - The given value is not within the range of V5 ports (1-21).
- * EACCES - Another resource is currently trying to access the port.
- * ENODATA - There's no data to read.
- * EBADMSG - data corrupted, CRC check failed
- * EPROTO - corrupted escape character, or dropped byte.
- * ENOLINK - Transmission stopped abruptly.
- *
- * @return std::span<const uint8_t> the payload
- */
-std::vector<uint8_t> read();
-
-/**
- * @brief Write a message to the coprocessor and wait for a response
- *
- * @param id the message ID
- * @param data the payload data
- * @param timeout how long to wait for a response, in milliseconds
- *
- * @return std::vector<uint8_t> the response payload
- */
-std::vector<uint8_t> write_and_receive(uint8_t id,
-                                       const std::vector<uint8_t>& data,
-                                       int timeout) noexcept;
 } // namespace copro
