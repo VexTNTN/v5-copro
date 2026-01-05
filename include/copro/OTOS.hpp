@@ -62,45 +62,45 @@ class Otos {
     // ~Otos() = delete;
 
     [[nodiscard]]
-    std::expected<Status, OtosError> get_status() noexcept;
+    std::expected<Status, OtosError> get_status();
 
     [[nodiscard]]
-    std::expected<bool, OtosError> self_test() noexcept;
+    std::expected<bool, OtosError> self_test();
 
     [[nodiscard]]
-    std::expected<void, OtosError> reset_tracking() noexcept;
+    std::expected<void, OtosError> reset_tracking();
 
     // --- Pose ---
     [[nodiscard]]
-    std::expected<Pose, OtosError> get_pose() noexcept;
+    std::expected<Pose, OtosError> get_pose();
 
     [[nodiscard]]
-    std::expected<void, OtosError> set_pose(Pose pose) noexcept;
+    std::expected<void, OtosError> set_pose(Pose pose);
 
     // --- Acceleration ---
     [[nodiscard]]
-    std::expected<Acceleration, OtosError> get_acceleration() noexcept;
+    std::expected<Acceleration, OtosError> get_acceleration();
 
     // --- Linear Scalar ---
     [[nodiscard]]
-    std::expected<float, OtosError> get_linear_scalar() noexcept;
+    std::expected<float, OtosError> get_linear_scalar();
 
     [[nodiscard]]
-    std::expected<void, OtosError> set_linear_scalar(float scalar) noexcept;
+    std::expected<void, OtosError> set_linear_scalar(float scalar);
 
     // --- Angular Scalar ---
     [[nodiscard]]
-    std::expected<float, OtosError> get_angular_scalar() noexcept;
+    std::expected<float, OtosError> get_angular_scalar();
 
     [[nodiscard]]
-    std::expected<void, OtosError> set_angular_scalar(float scalar) noexcept;
+    std::expected<void, OtosError> set_angular_scalar(float scalar);
 
     // --- Calibration ---
     [[nodiscard]]
-    std::expected<void, OtosError> calibrate(uint8_t samples) noexcept;
+    std::expected<void, OtosError> calibrate(uint8_t samples);
 
     [[nodiscard]]
-    std::expected<bool, OtosError> is_calibrated() noexcept;
+    std::expected<bool, OtosError> is_calibrated();
 
   private:
     copro::Coprocessor& m_copro;

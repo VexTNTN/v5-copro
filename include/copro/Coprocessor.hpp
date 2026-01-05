@@ -61,7 +61,7 @@ class Coprocessor {
      * @param port the smart port number
      * @param baud the baud rate (default 921600 recommended)
      */
-    constexpr Coprocessor(uint8_t port, uint32_t baud = 921600) noexcept
+    constexpr Coprocessor(uint8_t port, uint32_t baud = 921600)
         : m_port(port),
           m_baud(baud) {};
 
@@ -74,7 +74,7 @@ class Coprocessor {
      * Blocks shortly. Does not perform handshake
      */
     [[nodiscard]]
-    std::expected<void, CoproError> init() noexcept;
+    std::expected<void, CoproError> init();
 
     /**
      * @brief Write a message to the coprocessor and wait for a response.
@@ -84,7 +84,7 @@ class Coprocessor {
     write_and_receive(MessageId id,
                       const std::vector<uint8_t>& data,
                       int timeout,
-                      bool silence = false) noexcept;
+                      bool silence = false);
 
   private:
     // --- Member Variables ---
@@ -93,9 +93,7 @@ class Coprocessor {
     pros::Mutex m_mutex;
 
     // --- Constants ---
-    static constexpr uint8_t DELIMITER_1 = 0xAA;
-    static constexpr uint8_t DELIMITER_2 = 0x55;
-    static constexpr uint8_t ESCAPE = 0xBB;
+    static constexpr uint8_t COBS_DELIMITER = 0x00;
 
     // --- Private Implementation Helpers ---
 
@@ -103,12 +101,11 @@ class Coprocessor {
     std::expected<std::vector<uint8_t>, CoproError>
     write_and_receive_impl(MessageId id,
                            const std::vector<uint8_t>& data,
-                           int timeout) noexcept;
+                           int timeout);
 
     // Low-level IO
-    std::expected<void, CoproError>
-    write(const std::vector<uint8_t>& message) noexcept;
-    std::expected<std::vector<uint8_t>, CoproError> read() noexcept;
+    std::expected<void, CoproError> write(const std::vector<uint8_t>& message);
+    std::expected<std::vector<uint8_t>, CoproError> read();
 
     // Serial Primitives
     std::expected<uint8_t, CoproError> serial_byte_op(bool peek);
@@ -118,6 +115,9 @@ class Coprocessor {
 
     // Static Pure Logic Helpers
     static uint16_t crc16(const std::vector<uint8_t>& data);
+    static std::vector<uint8_t> cobs_encode(const std::vector<uint8_t>& data);
+    static std::vector<uint8_t> cobs_decode(const std::vector<uint8_t>& data);
+
     static CoproError make_errno_error(
       int current_port,
       std::source_location loc = std::source_location::current());

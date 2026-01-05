@@ -82,7 +82,7 @@ static constexpr float INT16_TO_RPSS = 1.0f / RPSS_TO_INT16;
 
 // --- Helper Functions ---
 
-static constexpr std::int16_t to_i16(float v) noexcept {
+static constexpr std::int16_t to_i16(float v) {
     constexpr auto I16_MIN = std::numeric_limits<std::int16_t>::min();
     constexpr auto I16_MAX = std::numeric_limits<std::int16_t>::max();
 
@@ -96,7 +96,7 @@ static constexpr std::int16_t to_i16(float v) noexcept {
     return static_cast<std::int16_t>(r);
 }
 
-static constexpr std::int8_t to_i8(float v) noexcept {
+static constexpr std::int8_t to_i8(float v) {
     constexpr std::int8_t I8_MIN = -128;
     constexpr std::int8_t I8_MAX = 127;
 
@@ -226,7 +226,7 @@ Otos::validate_message(const std::vector<uint8_t>& message,
     return {};
 }
 
-std::expected<Status, OtosError> Otos::get_status() noexcept {
+std::expected<Status, OtosError> Otos::get_status() {
     auto raw = TRY(
       m_copro.write_and_receive(MessageId::GetOtosStatus, {}, READ_TIMEOUT));
 
@@ -254,7 +254,7 @@ std::expected<Status, OtosError> Otos::get_status() noexcept {
     };
 }
 
-std::expected<bool, OtosError> Otos::self_test() noexcept {
+std::expected<bool, OtosError> Otos::self_test() {
     auto raw =
       TRY(m_copro.write_and_receive(MessageId::OtosSelfTest, {}, READ_TIMEOUT));
 
@@ -263,7 +263,7 @@ std::expected<bool, OtosError> Otos::self_test() noexcept {
     return true;
 }
 
-std::expected<void, OtosError> Otos::reset_tracking() noexcept {
+std::expected<void, OtosError> Otos::reset_tracking() {
     auto raw = TRY(m_copro.write_and_receive(MessageId::OtosResetTracking,
                                              {},
                                              READ_TIMEOUT));
@@ -273,7 +273,7 @@ std::expected<void, OtosError> Otos::reset_tracking() noexcept {
     return {};
 }
 
-std::expected<Pose, OtosError> Otos::get_pose() noexcept {
+std::expected<Pose, OtosError> Otos::get_pose() {
     auto raw =
       TRY(m_copro.write_and_receive(MessageId::OtosGetPose, {}, READ_TIMEOUT));
 
@@ -288,7 +288,7 @@ std::expected<Pose, OtosError> Otos::get_pose() noexcept {
                   rawH * INT16_TO_DEG };
 }
 
-std::expected<void, OtosError> Otos::set_pose(Pose pose) noexcept {
+std::expected<void, OtosError> Otos::set_pose(Pose pose) {
     int16_t rawX = to_i16(pose.x * INCH_TO_INT16);
     int16_t rawY = to_i16(pose.y * INCH_TO_INT16);
     int16_t rawH = to_i16(pose.h * DEG_TO_INT16);
@@ -318,7 +318,7 @@ std::expected<void, OtosError> Otos::set_pose(Pose pose) noexcept {
     return {};
 }
 
-std::expected<Acceleration, OtosError> Otos::get_acceleration() noexcept {
+std::expected<Acceleration, OtosError> Otos::get_acceleration() {
     auto raw =
       TRY(m_copro.write_and_receive(MessageId::OtosGetAccel, {}, READ_TIMEOUT));
 
@@ -333,7 +333,7 @@ std::expected<Acceleration, OtosError> Otos::get_acceleration() noexcept {
                           static_cast<float>(rawH * INT16_TO_RPSS / 360.0) };
 }
 
-std::expected<float, OtosError> Otos::get_linear_scalar() noexcept {
+std::expected<float, OtosError> Otos::get_linear_scalar() {
     auto raw = TRY(m_copro.write_and_receive(MessageId::OtosGetLinearScalar,
                                              {},
                                              READ_TIMEOUT));
@@ -343,7 +343,7 @@ std::expected<float, OtosError> Otos::get_linear_scalar() noexcept {
     return 0.001f * static_cast<int8_t>(raw.at(1)) + 1.0f;
 }
 
-std::expected<void, OtosError> Otos::set_linear_scalar(float scalar) noexcept {
+std::expected<void, OtosError> Otos::set_linear_scalar(float scalar) {
     const float scaled = (scalar - 1.0f) * 1000.0f;
     const std::int8_t raw_i8 = to_i8(scaled);
     const std::uint8_t raw_u8 = std::bit_cast<std::uint8_t>(raw_i8);
@@ -365,7 +365,7 @@ std::expected<void, OtosError> Otos::set_linear_scalar(float scalar) noexcept {
     return {};
 }
 
-std::expected<float, OtosError> Otos::get_angular_scalar() noexcept {
+std::expected<float, OtosError> Otos::get_angular_scalar() {
     auto raw = TRY(m_copro.write_and_receive(MessageId::OtosGetAngularScalar,
                                              {},
                                              READ_TIMEOUT));
@@ -375,7 +375,7 @@ std::expected<float, OtosError> Otos::get_angular_scalar() noexcept {
     return 0.001f * static_cast<int8_t>(raw.at(1)) + 1.0f;
 }
 
-std::expected<void, OtosError> Otos::set_angular_scalar(float scalar) noexcept {
+std::expected<void, OtosError> Otos::set_angular_scalar(float scalar) {
     const float scaled = (scalar - 1.0f) * 1000.0f;
     const std::int8_t raw_i8 = to_i8(scaled);
     const std::uint8_t raw_u8 = std::bit_cast<std::uint8_t>(raw_i8);
@@ -397,7 +397,7 @@ std::expected<void, OtosError> Otos::set_angular_scalar(float scalar) noexcept {
     return {};
 }
 
-std::expected<void, OtosError> Otos::calibrate(uint8_t samples) noexcept {
+std::expected<void, OtosError> Otos::calibrate(uint8_t samples) {
     auto raw = TRY(
       m_copro.write_and_receive(MessageId::OtosCalibrate, { samples }, 1500));
 
@@ -406,7 +406,7 @@ std::expected<void, OtosError> Otos::calibrate(uint8_t samples) noexcept {
     return {};
 }
 
-std::expected<bool, OtosError> Otos::is_calibrated() noexcept {
+std::expected<bool, OtosError> Otos::is_calibrated() {
     auto raw = TRY(
       m_copro.write_and_receive(MessageId::OtosIsCalibrated, {}, READ_TIMEOUT));
 

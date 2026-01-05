@@ -18,13 +18,13 @@ enum class MessageId {
     GetMeasurement = 54,
 };
 
-int start(Id id) noexcept {}
+int start(Id id) {}
 
-int stop(Id id) noexcept {}
+int stop(Id id) {}
 
-int reset(Id id) noexcept {}
+int reset(Id id) {}
 
-Health getHealth(Id id) noexcept {}
+Health getHealth(Id id) {}
 
-Measurement getMeasurement() noexcept {}
+Measurement getMeasurement() {}
 } // namespace lidar

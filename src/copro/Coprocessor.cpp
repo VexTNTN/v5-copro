@@ -4,7 +4,6 @@
 #include "pros/serial.h"
 #include <cerrno>
 #include <format>
-#include <limits>
 #include <mutex>
 #include <ranges>
 
@@ -170,7 +169,60 @@ uint16_t Coprocessor::crc16(const std::vector<uint8_t>& data) {
     return crc;
 }
 
-std::expected<void, CoproError> Coprocessor::init() noexcept {
+std::vector<uint8_t>
+Coprocessor::cobs_encode(const std::vector<uint8_t>& data) {
+    std::vector<uint8_t> result;
+    result.reserve(data.size() + data.size() / 254 + 2);
+
+    size_t code_index = result.size();
+    result.push_back(0); // placeholder for code
+    uint8_t code = 1;
+
+    for (uint8_t byte : data) {
+        if (byte != 0) {
+            result.push_back(byte);
+            code++;
+            if (code == 0xFF) {
+                result.at(code_index) = code;
+                code = 1;
+                code_index = result.size();
+                result.push_back(0);
+            }
+        } else {
+            result.at(code_index) = code;
+            code = 1;
+            code_index = result.size();
+            result.push_back(0);
+        }
+    }
+
+    result.at(code_index) = code;
+    return result;
+}
+
+std::vector<uint8_t>
+Coprocessor::cobs_decode(const std::vector<uint8_t>& data) {
+    std::vector<uint8_t> decoded;
+    decoded.reserve(data.size());
+    size_t i = 0;
+
+    while (i < data.size()) {
+        uint8_t code = data.at(i++);
+        if (code == 0) break; // Should not happen in valid COBS frame
+
+        for (uint8_t j = 1; j < code; j++) {
+            if (i >= data.size()) break;
+            decoded.push_back(data.at(i++));
+        }
+
+        if (code < 0xFF && i < data.size()) {
+            decoded.push_back(0);
+        }
+    }
+    return decoded;
+}
+
+std::expected<void, CoproError> Coprocessor::init() {
     // Note: m_port is now used instead of s_port
     int res = pros::c::serial_enable(m_port);
     if (res == PROS_ERR) return std::unexpected(make_errno_error(m_port));
@@ -224,117 +276,93 @@ Coprocessor::read_exact(size_t n) {
 }
 
 std::expected<void, CoproError>
-Coprocessor::write(const std::vector<uint8_t>& message) noexcept {
-    // 1. Stuff Payload
+Coprocessor::write(const std::vector<uint8_t>& message) {
+    // 1. Build Payload [CRC][Message]
     std::vector<uint8_t> payload;
-    payload.reserve(message.size());
-
-    for (uint8_t b : message) {
-        if (b == DELIMITER_1 || b == DELIMITER_2 || b == ESCAPE) {
-            payload.push_back(ESCAPE);
-        }
-        payload.push_back(b);
-    }
-
-    if (payload.size() > std::numeric_limits<uint16_t>::max()) {
-        return std::unexpected(
-          CoproError { .type = CoproError::Type::MessageTooBig,
-                       .what = "Payload exceeds max length",
-                       .where = { std::source_location::current() } });
-    }
-
-    // 2. Build Header
-    std::vector<uint8_t> packet;
-    packet.reserve(payload.size() + 6);
-    packet.push_back(DELIMITER_1);
-    packet.push_back(DELIMITER_2);
-
-    auto len_bytes = serialize(static_cast<uint16_t>(payload.size()));
-    packet.insert(packet.end(), len_bytes.begin(), len_bytes.end());
+    payload.reserve(message.size() + 2);
 
     auto crc_bytes = serialize(crc16(message));
-    packet.insert(packet.end(), crc_bytes.begin(), crc_bytes.end());
+    payload.insert(payload.end(), crc_bytes.begin(), crc_bytes.end());
+    payload.insert(payload.end(), message.begin(), message.end());
 
-    // 3. Send Header + Payload
+    // 2. COBS Encode
+    std::vector<uint8_t> encoded = cobs_encode(payload);
+
+    // 3. Send [0x00][Encoded][0x00]
+    std::vector<uint8_t> packet;
+    packet.reserve(encoded.size() + 2);
+    packet.push_back(COBS_DELIMITER);
+    packet.insert(packet.end(), encoded.begin(), encoded.end());
+    packet.push_back(COBS_DELIMITER);
+
     if (pros::c::serial_write(m_port, packet.data(), packet.size()) == PROS_ERR)
-        return std::unexpected(make_errno_error(m_port));
-
-    if (pros::c::serial_write(m_port, payload.data(), payload.size()) ==
-        PROS_ERR)
         return std::unexpected(make_errno_error(m_port));
 
     return {};
 }
 
-std::expected<std::vector<uint8_t>, CoproError> Coprocessor::read() noexcept {
+std::expected<std::vector<uint8_t>, CoproError> Coprocessor::read() {
     int avail = pros::c::serial_get_read_avail(m_port);
     if (avail == PROS_ERR) return std::unexpected(make_errno_error(m_port));
-    if (avail == 0) {
-        return std::unexpected(
-          CoproError { CoproError::Type::NoData,
-                       "No data",
-                       { std::source_location::current() } });
-    }
+    // Do not return NoData immediately; allow read_byte loop to try at least
+    // once or rely on the caller timeout loop.
 
-    // 1. Sync to delimiters
+    std::vector<uint8_t> buffer;
+
+    // 1. Read until Delimiter (Frame Sync)
     while (true) {
-        if (TRY(read_byte()) == DELIMITER_1) {
-            if (TRY(peek_byte()) == DELIMITER_2) {
-                TRY(read_byte());
+        // We use read_byte which has a small retry loop.
+        // If it returns error (timeout/cutoff), we abort.
+        uint8_t b = TRY(read_byte());
+
+        if (b == COBS_DELIMITER) {
+            if (buffer.empty()) {
+                // Found a delimiter but buffer is empty (e.g. leading zero or
+                // double zero) Continue waiting for data.
+                continue;
+            } else {
+                // End of Frame
                 break;
             }
         }
+        buffer.push_back(b);
     }
 
-    // 2. Read Header
-    uint16_t length = TRY(read_pod<uint16_t>());
-    uint16_t expected_crc = TRY(read_pod<uint16_t>());
-
-    // 3. Read Payload
-    std::vector<uint8_t> data;
-    data.reserve(length);
-
-    for (int i = 0; i < length; ++i) {
-        uint8_t b = TRY(peek_byte());
-
-        if (b == DELIMITER_1 || b == DELIMITER_2) {
-            return std::unexpected(
-              CoproError { CoproError::Type::CorruptedRead,
-                           "Unescaped delimiter found (Sync Lost)",
-                           { std::source_location::current() } });
-        }
-
-        TRY(read_byte());
-
-        if (b == ESCAPE) {
-            if (++i >= length) {
-                return std::unexpected(
-                  CoproError { CoproError::Type::CorruptedRead,
-                               "Trailing escape byte",
-                               { std::source_location::current() } });
-            }
-            data.push_back(TRY(read_byte()));
-        } else {
-            data.push_back(b);
-        }
+    // 2. Decode
+    std::vector<uint8_t> decoded = cobs_decode(buffer);
+    if (decoded.size() < 2) {
+        return std::unexpected(
+          CoproError { CoproError::Type::CorruptedRead,
+                       "Frame too short",
+                       { std::source_location::current() } });
     }
 
-    // 4. Verify CRC
-    if (crc16(data) != expected_crc) {
+    // 3. Verify CRC
+    // CRC is first 2 bytes
+    uint16_t received_crc = (uint16_t(decoded[1]) << 8) | decoded[0];
+    // ^ Assuming little-endian read_pod equivalent logic:
+    // Actually, let's match the `write` logic: serialize() uses host order
+    // (bit_cast). So we should read it back similarly.
+    std::array<uint8_t, 2> crc_raw = { decoded[0], decoded[1] };
+    received_crc = std::bit_cast<uint16_t>(crc_raw);
+
+    std::vector<uint8_t> payload(decoded.begin() + 2, decoded.end());
+
+    if (crc16(payload) != received_crc) {
         return std::unexpected(
           CoproError { CoproError::Type::CorruptedRead,
                        "CRC Mismatch",
                        { std::source_location::current() } });
     }
 
-    return data;
+    return payload;
 }
 
 std::expected<std::vector<uint8_t>, CoproError>
 Coprocessor::write_and_receive(MessageId id,
                                const std::vector<uint8_t>& data,
                                int timeout,
-                               bool silence) noexcept {
+                               bool silence) {
     auto rtn = write_and_receive_impl(id, data, timeout);
     if (!rtn.has_value() && !silence) {
         std::cout << rtn.error() << std::endl;
@@ -345,7 +373,7 @@ Coprocessor::write_and_receive(MessageId id,
 std::expected<std::vector<uint8_t>, CoproError>
 Coprocessor::write_and_receive_impl(MessageId id,
                                     const std::vector<uint8_t>& data,
-                                    int timeout) noexcept {
+                                    int timeout) {
     std::lock_guard lock(m_mutex);
 
     std::vector<uint8_t> packet;
@@ -363,7 +391,11 @@ Coprocessor::write_and_receive_impl(MessageId id,
             return std::vector<uint8_t>(raw->begin() + 1, raw->end());
         }
 
-        if (raw.error().type == CoproError::Type::NoData) {
+        // If read() timed out waiting for delimiter (DataCutOff) or found
+        // nothing (NoData check removed inside read but error propagates),
+        // retry
+        if (raw.error().type == CoproError::Type::DataCutOff ||
+            raw.error().type == CoproError::Type::NoData) {
             pros::delay(1);
             continue;
         }
