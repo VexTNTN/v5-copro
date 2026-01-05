@@ -78,8 +78,7 @@ std::ostream& operator<<(std::ostream& os, const CoproError& err) {
         // Iterate in reverse
         for (const auto& loc : std::views::reverse(err.where)) {
             os << "    at " << loc.function_name() << " (" << loc.file_name()
-               << ":" << loc.line() << ":" << loc.column() << ":"
-               << loc.column() << ")\n";
+               << ":" << loc.line() << ":" << loc.column() << ")\n";
         }
     }
     return os;
@@ -115,7 +114,7 @@ CoproError Coprocessor::make_errno_error(int port, std::source_location loc) {
             break;
         case EADDRINUSE:
             type = CoproError::Type::InvalidPort;
-            what = "Invalid port! Non-V5 device present";
+            what = "Invalid port! V5 device present!";
             break;
         default:
             type = CoproError::Type::Unknown;
